@@ -1,3 +1,5 @@
+original repo forked from - https://github.com/prateek/codex-transcripts
+
 # codex-transcripts
 
 Convert Codex session rollout files (`rollout-*.jsonl`) into a clean, mobile-friendly, self-contained HTML transcript viewer (`index.html`).

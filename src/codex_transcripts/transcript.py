@@ -285,6 +285,15 @@ def generate_html_from_session_data(
                 parts.append(get_template("macros.html").module.index_long_text(render_markdown_text(snippet)))
             long_texts_html = "".join(parts)
 
+        # Preview of Codex's final response, shown on the conversation card.
+        response_html = ""
+        final_text = (stats_obj.final_text or "").strip()
+        if final_text:
+            response_preview = final_text.replace("\n", " ").strip()
+            if len(response_preview) > 240:
+                response_preview = response_preview[:240] + "…"
+            response_html = render_markdown_text(response_preview)
+
         prompt_html = ""
         prompt_raw = prompt_text.strip() if isinstance(prompt_text, str) and prompt_text.strip() else None
         if prompt_raw is not None:
@@ -312,6 +321,7 @@ def generate_html_from_session_data(
                 "tool_calls": tool_calls,
                 "tool_stats": tool_stats_str,
                 "long_texts_html": long_texts_html,
+                "response_html": response_html,
                 "commit_count": len(stats_obj.commits),
                 "prompt_html": prompt_html,
                 "prompt_plain": prompt_plain,

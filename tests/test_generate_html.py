@@ -16,9 +16,9 @@ def test_generate_html_creates_single_file_html(tmp_path: Path):
     index_html = out_html.read_text(encoding="utf-8")
     assert "Codex transcript" in index_html
     assert "Search" in index_html
-    assert 'id="theme-toggle"' in index_html
-    assert 'id="minimap"' in index_html
-    assert 'id="kb-help"' in index_html
+    assert 'id="cmdk-trigger"' in index_html
+    assert 'id="cmdk"' in index_html
+    assert 'id="side-nav"' in index_html
     assert 'class="conversation index-item"' in index_html
     assert "prefers-color-scheme" in index_html
     assert "<script src=" not in index_html

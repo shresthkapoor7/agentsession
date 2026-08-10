@@ -136,18 +136,24 @@
 
   function kindLabel(ch) {
     if (ch === 'u') return 'user';
-    if (ch === 'a') return 'assistant';
+    if (ch === 'a') return 'codex';
     if (ch === 't') return 'tool call';
     if (ch === 'r') return 'tool reply';
     if (ch === 's') return 'system';
     return 'system';
   }
 
-  function findNextByKind(fromIndex, kindChar, direction, minIndex, maxIndex) {
+  function clampIndex(idx) {
+    if (idx < 0) idx = 0;
+    if (idx > meta.total - 1) idx = meta.total - 1;
+    return idx;
+  }
+
+  function findNextByKind(fromIndex, kindChar, direction) {
     var i = fromIndex;
     while (true) {
       i += direction;
-      if (i < minIndex || i > maxIndex) return null;
+      if (i < 0 || i > meta.total - 1) return null;
       if (kindCharAt(i) === kindChar) return i;
     }
   }
@@ -211,365 +217,11 @@
     });
   }
 
-  // Selection/filtering via minimap brush.
-  var selStart = 0;
-  var selEnd = Math.max(0, (meta.total || 1) - 1);
+  // Master-detail: a conversation's full thread renders into the right-side pane.
+  var pane, detailBody, detailRole, detailTime;
+  var currentPaneGroup = -1;
 
-  function clampSelection() {
-    if (selStart < 0) selStart = 0;
-    if (selEnd < 0) selEnd = 0;
-    if (selStart > selEnd) selStart = selEnd;
-    var max = Math.max(0, (meta.total || 1) - 1);
-    if (selEnd > max) selEnd = max;
-    if (selStart > max) selStart = max;
-    if (selStart > selEnd) selStart = selEnd;
-  }
-
-  function selectionActive() {
-    return selStart > 0 || selEnd < Math.max(0, (meta.total || 1) - 1);
-  }
-
-  function applyGroupFilter() {
-    var groups = document.querySelectorAll('.conversation');
-    groups.forEach(function(d) {
-      var start = parseInt(d.getAttribute('data-start') || '0', 10);
-      var end = parseInt(d.getAttribute('data-end') || '0', 10);
-      var overlaps = !(end < selStart || start > selEnd);
-      if (!overlaps) {
-        d.classList.add('filtered-out');
-        if (d.open) d.open = false;
-      } else {
-        d.classList.remove('filtered-out');
-      }
-    });
-  }
-
-  function setSelection(startIdx, endIdx) {
-    selStart = startIdx | 0;
-    selEnd = endIdx | 0;
-    clampSelection();
-    updateBrushUI();
-    applyGroupFilter();
-  }
-
-  function updateBrushUI() {
-    var canvas = document.getElementById('minimap');
-    var selEl = document.getElementById('minimap-selection');
-    var hL = document.getElementById('minimap-handle-left');
-    var hR = document.getElementById('minimap-handle-right');
-    if (!canvas || !selEl || !hL || !hR) return;
-
-    var total = Math.max(1, meta.total || 1);
-    var startRatio = selStart / total;
-    var endRatio = (selEnd + 1) / total;
-    if (endRatio < startRatio) endRatio = startRatio;
-
-    selEl.style.left = (startRatio * 100) + '%';
-    selEl.style.width = ((endRatio - startRatio) * 100) + '%';
-    hL.style.left = (startRatio * 100) + '%';
-    hR.style.left = (endRatio * 100) + '%';
-    selEl.classList.toggle('active', selectionActive());
-  }
-
-  function setupBrush() {
-    var canvas = document.getElementById('minimap');
-    var selEl = document.getElementById('minimap-selection');
-    var hL = document.getElementById('minimap-handle-left');
-    var hR = document.getElementById('minimap-handle-right');
-    if (!canvas || !selEl || !hL || !hR) return;
-
-    var drag = null;
-    var startClientX = 0;
-    var startSelStart = 0;
-    var startSelEnd = 0;
-
-    function pxToIndex(clientX) {
-      var rect = canvas.getBoundingClientRect();
-      var x = clientX - rect.left;
-      var ratio = rect.width ? (x / rect.width) : 0;
-      if (ratio < 0) ratio = 0;
-      if (ratio > 1) ratio = 1;
-      var idx = Math.floor(ratio * (meta.total || 0));
-      if (idx < 0) idx = 0;
-      if (idx > (meta.total - 1)) idx = meta.total - 1;
-      return idx;
-    }
-
-    function onDown(which, e) {
-      e.preventDefault();
-      drag = which;
-      startClientX = e.clientX;
-      startSelStart = selStart;
-      startSelEnd = selEnd;
-      window.addEventListener('pointermove', onMove);
-      window.addEventListener('pointerup', onUp, { once: true });
-    }
-
-    function onMove(e) {
-      if (!drag) return;
-      if (drag === 'left') {
-        setSelection(pxToIndex(e.clientX), selEnd);
-        return;
-      }
-      if (drag === 'right') {
-        setSelection(selStart, pxToIndex(e.clientX));
-        return;
-      }
-      if (drag === 'range') {
-        var rect = canvas.getBoundingClientRect();
-        var dx = (e.clientX - startClientX);
-        var total = Math.max(1, meta.total || 1);
-        var deltaIdx = Math.round((dx / rect.width) * total);
-        setSelection(startSelStart + deltaIdx, startSelEnd + deltaIdx);
-        return;
-      }
-    }
-
-    function onUp() {
-      drag = null;
-      window.removeEventListener('pointermove', onMove);
-    }
-
-    hL.addEventListener('pointerdown', function(e) { onDown('left', e); });
-    hR.addEventListener('pointerdown', function(e) { onDown('right', e); });
-    selEl.addEventListener('pointerdown', function(e) { onDown('range', e); });
-    canvas.addEventListener('dblclick', function() { setSelection(0, Math.max(0, (meta.total || 1) - 1)); });
-  }
-
-  // Minimap drawing + hover tooltip.
-  function minimapColors() {
-    var styles = window.getComputedStyle(document.documentElement);
-    return {
-      u: styles.getPropertyValue('--user-border').trim() || '#1976d2',
-      a: styles.getPropertyValue('--assistant-border').trim() || '#9e9e9e',
-      t: styles.getPropertyValue('--tool-border').trim() || '#9c27b0',
-      r: styles.getPropertyValue('--thinking-border').trim() || '#ffc107',
-      s: styles.getPropertyValue('--system-border').trim() || '#f97316',
-      cursor: styles.getPropertyValue('--text-muted').trim() || '#757575',
-      bg: styles.getPropertyValue('--card-bg').trim() || '#ffffff'
-    };
-  }
-
-  var minimapBins = null;
-  function computeBins(binCount) {
-    var bins = new Array(binCount);
-    for (var i = 0; i < binCount; i++) bins[i] = { u: 0, a: 0, t: 0, r: 0, s: 0 };
-    var total = meta.total || 0;
-    for (var j = 0; j < total; j++) {
-      var b = Math.floor((j / total) * binCount);
-      if (b >= binCount) b = binCount - 1;
-      var k = kindCharAt(j);
-      if (k === 'u') bins[b].u++;
-      else if (k === 'a') bins[b].a++;
-      else if (k === 't') bins[b].t++;
-      else if (k === 'r') bins[b].r++;
-      else bins[b].s++;
-    }
-    return bins;
-  }
-
-  function resizeMinimap() {
-    var minimap = document.getElementById('minimap');
-    if (!minimap) return;
-    var rect = minimap.getBoundingClientRect();
-    var dpr = window.devicePixelRatio || 1;
-    minimap.width = Math.max(1, Math.floor(rect.width * dpr));
-    minimap.height = Math.max(1, Math.floor((rect.height || 64) * dpr));
-    minimapBins = null;
-    drawMinimap();
-    updateBrushUI();
-  }
-
-  function drawMinimap(activeIndex) {
-    var minimap = document.getElementById('minimap');
-    if (!minimap) return;
-    var ctx = minimap.getContext('2d');
-    if (!ctx) return;
-
-    var w = minimap.width;
-    var h = minimap.height;
-    var colors = minimapColors();
-    ctx.clearRect(0, 0, w, h);
-
-    var binCount = Math.min(w, Math.max(1, Math.min(meta.total, 800)));
-    if (!minimapBins || minimapBins.length !== binCount) minimapBins = computeBins(binCount);
-
-    var scaleX = w / binCount;
-    for (var i = 0; i < binCount; i++) {
-      var b = minimapBins[i];
-      var total = b.u + b.a + b.t + b.r + b.s;
-      if (!total) continue;
-
-      var x = Math.floor(i * scaleX);
-      var barW = Math.max(1, Math.ceil(scaleX));
-      var y = h;
-
-      // Use sqrt-scaling per bin to reduce domination by a single kind and make
-      // sparse kinds more visible in the minimap.
-      var parts = [
-        { count: b.s, color: colors.s },
-        { count: b.r, color: colors.r },
-        { count: b.t, color: colors.t },
-        { count: b.a, color: colors.a },
-        { count: b.u, color: colors.u }
-      ];
-      var weights = new Array(parts.length);
-      var weightSum = 0;
-      for (var p = 0; p < parts.length; p++) {
-        var c = parts[p].count | 0;
-        var wgt = c > 0 ? Math.sqrt(c) : 0;
-        weights[p] = wgt;
-        weightSum += wgt;
-      }
-      if (weightSum <= 0) continue;
-
-      var heights = new Array(parts.length);
-      var used = 0;
-      var raw = new Array(parts.length);
-      for (var q = 0; q < parts.length; q++) {
-        var wq = weights[q];
-        if (wq <= 0) { heights[q] = 0; raw[q] = 0; continue; }
-        var rq = (wq / weightSum) * h;
-        raw[q] = rq;
-        var ih = Math.floor(rq);
-        if (ih < 1) ih = 1;
-        heights[q] = ih;
-        used += ih;
-      }
-
-      // If min-heights pushed us over, shave pixels from the largest segments.
-      while (used > h) {
-        var best = -1;
-        var bestH = 0;
-        for (var r = 0; r < heights.length; r++) {
-          var hr = heights[r];
-          if (hr > 1 && hr > bestH) { bestH = hr; best = r; }
-        }
-        if (best < 0) break;
-        heights[best] -= 1;
-        used -= 1;
-      }
-
-      // Distribute remaining pixels to largest fractional remainders.
-      if (used < h) {
-        var fracs = [];
-        for (var s = 0; s < heights.length; s++) {
-          if (heights[s] <= 0) continue;
-          var frac = raw[s] - Math.floor(raw[s]);
-          fracs.push({ i: s, frac: frac });
-        }
-        fracs.sort(function(a, b) { return b.frac - a.frac; });
-        var k = 0;
-        while (used < h && fracs.length) {
-          heights[fracs[k % fracs.length].i] += 1;
-          used += 1;
-          k += 1;
-        }
-      }
-
-      for (var t = 0; t < parts.length; t++) {
-        var ph = heights[t] | 0;
-        if (ph <= 0) continue;
-        y -= ph;
-        if (y < 0) { ph += y; y = 0; }
-        if (ph <= 0) break;
-        ctx.fillStyle = parts[t].color;
-        ctx.fillRect(x, y, barW, ph);
-      }
-    }
-
-    if (typeof activeIndex === 'number' && meta.total > 0) {
-      var ratio = activeIndex / meta.total;
-      var cx = Math.floor(ratio * w);
-      ctx.fillStyle = colors.cursor;
-      ctx.fillRect(cx, 0, Math.max(2, Math.round((window.devicePixelRatio || 1))), h);
-    }
-  }
-
-  function setupTooltip() {
-    var minimap = document.getElementById('minimap');
-    var tip = document.getElementById('minimap-tooltip');
-    if (!minimap || !tip) return;
-
-    function hide() {
-      tip.style.display = 'none';
-    }
-
-    function show(e) {
-      var rect = minimap.getBoundingClientRect();
-      var x = e.clientX - rect.left;
-      var ratio = rect.width ? (x / rect.width) : 0;
-      if (ratio < 0) ratio = 0;
-      if (ratio > 1) ratio = 1;
-      var idx = Math.floor(ratio * (meta.total || 0));
-      if (idx < 0) idx = 0;
-      if (idx > meta.total - 1) idx = meta.total - 1;
-
-      var ts = meta.ts && meta.ts[idx] ? meta.ts[idx] : '';
-      var k = kindCharAt(idx);
-      var gidx = groupIndexForMessage(idx);
-      var g = (meta.groups && gidx != null) ? meta.groups[gidx] : null;
-      var prompt = g && g.prompt ? String(g.prompt) : '(session start)';
-      prompt = prompt.replace(/\s+/g, ' ').trim();
-      if (prompt.length > 90) prompt = prompt.slice(0, 90) + '…';
-
-      tip.innerHTML =
-        '<div class="minimap-tip-title">' + (gidx != null ? ('Conversation #' + (gidx + 1)) : 'Conversation') + '</div>' +
-        '<div class="minimap-tip-body">' +
-          '<div><span class="minimap-tip-k">' + kindLabel(k) + '</span> · <code>' + ts + '</code></div>' +
-          '<div class="minimap-tip-prompt">' + prompt + '</div>' +
-        '</div>';
-
-      tip.style.display = 'block';
-      tip.style.left = Math.max(8, Math.min(rect.width - 8, x)) + 'px';
-    }
-
-    minimap.addEventListener('mousemove', show);
-    minimap.addEventListener('mouseleave', hide);
-  }
-
-  // Message navigation + permalinks
-  var activeIndex = 0;
-  function setActiveIndex(idx) {
-    activeIndex = idx;
-  }
-
-  function highlightActiveMessage(id) {
-    document.querySelectorAll('.message.active').forEach(function(m) { m.classList.remove('active'); });
-    if (!id) return;
-    var el = document.getElementById(id);
-    if (el) el.classList.add('active');
-  }
-
-  function scrollToIndex(idx) {
-    if (meta.total <= 0) return;
-    clampSelection();
-    if (idx < selStart) idx = selStart;
-    if (idx > selEnd) idx = selEnd;
-    if (idx < 0) idx = 0;
-    if (idx >= meta.total) idx = meta.total - 1;
-
-    var id = meta.ids && meta.ids[idx] ? meta.ids[idx] : null;
-    if (!id) return;
-
-    var gidx = groupIndexForMessage(idx);
-    if (gidx == null) return;
-    var d = getConversationEl(gidx);
-    if (d) d.open = true;
-
-    loadConversation(gidx).then(function() {
-      var target = document.getElementById(id);
-      if (target) {
-        target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        highlightActiveMessage(id);
-      }
-      setActiveIndex(idx);
-      try {
-        history.replaceState(null, '', window.location.pathname + window.location.search + '#' + id);
-      } catch (e) {}
-      drawMinimap(idx);
-    });
-  }
+  function groupCount() { return (meta.groups || []).length; }
 
   function indexForId(id) {
     if (!meta.ids || !meta.ids.length) return -1;
@@ -579,285 +231,453 @@
     return -1;
   }
 
-  function handleHash() {
-    if (!window.location.hash) return false;
-    var id = window.location.hash.slice(1);
-    if (!id) return false;
-    var idx = indexForId(id);
-    if (idx >= 0) {
-      scrollToIndex(idx);
+  function openConversation(gidx, focusMsgId) {
+    if (gidx == null || gidx < 0 || gidx >= groupCount()) return Promise.resolve(false);
+    var g = meta.groups[gidx];
+    var start = g.start | 0;
+    var end = g.end | 0;
+    var chunks = ensureChunksForRange(start, end);
+    return waitForChunks(chunks).then(function() {
+      if (!detailBody) return false;
+      var parts = [];
+      for (var i = start; i <= end; i++) {
+        var h = getItemHtml(i);
+        if (h) parts.push(h);
+      }
+      detailBody.innerHTML = parts.length ? parts.join('') : '<div class="detail-empty">No content.</div>';
+      enhance(detailBody);
+
+      var card = getConversationEl(gidx);
+      var summary = card ? card.querySelector('.conversation-summary') : null;
+      var label = summary ? (summary.getAttribute('data-label') || '') : '';
+      if (detailRole) detailRole.textContent = label || 'Conversation';
+      if (detailTime) detailTime.textContent = (meta.ts && meta.ts[start]) ? meta.ts[start] : '';
+
+      document.body.classList.add('detail-open');
+      pane.setAttribute('aria-hidden', 'false');
+      document.querySelectorAll('.conversation.detail-active').forEach(function(c) { c.classList.remove('detail-active'); });
+      if (card) card.classList.add('detail-active');
+      currentPaneGroup = gidx;
+      setActiveGroup(gidx);
+
+      detailBody.querySelectorAll('.message.detail-focus').forEach(function(m) { m.classList.remove('detail-focus'); });
+      var target = focusMsgId ? detailBody.querySelector('[id="' + focusMsgId + '"]') : null;
+      if (target) {
+        target.classList.add('detail-focus');
+        target.scrollIntoView({ block: 'center' });
+      } else {
+        detailBody.scrollTop = 0;
+      }
+      try {
+        history.replaceState(null, '', window.location.pathname + window.location.search + '#c' + gidx);
+      } catch (e) {}
       return true;
-    }
-    return false;
-  }
-
-  // Help + shortcuts
-  var pendingBracket = null;
-  var pendingTimer = null;
-  function toggleHelp(open) {
-    var helpDialog = document.getElementById('kb-help');
-    if (!helpDialog) return;
-    var isOpen = helpDialog.open;
-    var next = typeof open === 'boolean' ? open : !isOpen;
-    if (next && !isOpen) helpDialog.showModal();
-    else if (!next && isOpen) helpDialog.close();
-  }
-
-  function setupKeyboard() {
-    var helpBtn = document.getElementById('kb-help-btn');
-    var helpClose = document.getElementById('kb-help-close');
-    var helpDialog = document.getElementById('kb-help');
-    if (helpBtn) helpBtn.addEventListener('click', function() { toggleHelp(); });
-    if (helpClose) helpClose.addEventListener('click', function() { toggleHelp(false); });
-    if (helpDialog) {
-      helpDialog.addEventListener('click', function(e) {
-        var rect = helpDialog.getBoundingClientRect();
-        if (e.clientX < rect.left || e.clientX > rect.right || e.clientY < rect.top || e.clientY > rect.bottom) {
-          toggleHelp(false);
-        }
-      });
-    }
-
-    document.addEventListener('keydown', function(e) {
-      if (e.defaultPrevented) return;
-      if (isTextInputFocused()) return;
-
-      if (e.key === 'Escape') {
-        if (helpDialog && helpDialog.open) {
-          e.preventDefault();
-          toggleHelp(false);
-        }
-        var modal = document.getElementById('search-modal');
-        if (modal && modal.open) {
-          e.preventDefault();
-          modal.close();
-        }
-        return;
-      }
-
-      if (e.key === '?') {
-        e.preventDefault();
-        toggleHelp();
-        return;
-      }
-
-      if (pendingBracket) {
-        e.preventDefault();
-        var dir = pendingBracket === ']' ? 1 : -1;
-        pendingBracket = null;
-        if (pendingTimer) { clearTimeout(pendingTimer); pendingTimer = null; }
-        var k = (e.key || '').toLowerCase();
-        if (k === 'a' || k === 'u' || k === 't' || k === 'r' || k === 's') {
-          var idx = findNextByKind(activeIndex, k, dir, selStart, selEnd);
-          if (idx != null) scrollToIndex(idx);
-        }
-        return;
-      }
-
-      if (e.key === '[' || e.key === ']') {
-        e.preventDefault();
-        pendingBracket = e.key;
-        if (pendingTimer) clearTimeout(pendingTimer);
-        pendingTimer = setTimeout(function() { pendingBracket = null; pendingTimer = null; }, 1000);
-        return;
-      }
-
-      if (e.key === 'n' || e.key === 'j') {
-        e.preventDefault();
-        scrollToIndex(activeIndex + 1);
-        return;
-      }
-      if (e.key === 'p' || e.key === 'k') {
-        e.preventDefault();
-        scrollToIndex(activeIndex - 1);
-        return;
-      }
-      if (e.key === 'g') {
-        e.preventDefault();
-        scrollToIndex(selStart);
-        return;
-      }
-      if (e.key === 'G') {
-        e.preventDefault();
-        scrollToIndex(selEnd);
-        return;
-      }
     });
   }
 
-  // Search
-  function setupSearch() {
-    var searchInput = document.getElementById('search-input');
-    var searchBtn = document.getElementById('search-btn');
-    var modal = document.getElementById('search-modal');
-    var modalInput = document.getElementById('modal-search-input');
-    var modalSearchBtn = document.getElementById('modal-search-btn');
-    var modalCloseBtn = document.getElementById('modal-close-btn');
-    var searchStatus = document.getElementById('search-status');
-    var searchResults = document.getElementById('search-results');
-    if (!searchInput || !searchBtn || !modal || !modalInput || !modalSearchBtn || !modalCloseBtn) return;
+  function closeDetail() {
+    document.body.classList.remove('detail-open');
+    if (pane) pane.setAttribute('aria-hidden', 'true');
+    document.querySelectorAll('.conversation.detail-active').forEach(function(c) { c.classList.remove('detail-active'); });
+    currentPaneGroup = -1;
+  }
 
-    function openModal(query) {
-      modalInput.value = query || '';
-      searchResults.innerHTML = '';
-      searchStatus.textContent = '';
-      modal.showModal();
-      modalInput.focus();
-      if (query) performSearch(query);
+  function handleHash() {
+    if (!window.location.hash) return false;
+    var h = window.location.hash.slice(1);
+    if (!h) return false;
+    var m = h.match(/^c(\d+)$/);
+    if (m) { openConversation(parseInt(m[1], 10)); return true; }
+    var idx = indexForId(h);
+    if (idx >= 0) { openConversation(groupIndexForMessage(idx), h); return true; }
+    return false;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Side navigator: one tick per conversation. The active/hovered tick grows.
+  // ---------------------------------------------------------------------------
+  var sideTicks = [];
+  var currentGroup = -1;
+
+  function setActiveGroup(gidx) {
+    if (gidx === currentGroup) return;
+    currentGroup = gidx;
+    for (var i = 0; i < sideTicks.length; i++) {
+      sideTicks[i].classList.toggle('active', parseInt(sideTicks[i].dataset.groupIndex, 10) === gidx);
+    }
+  }
+
+  function escapeHtml(text) {
+    var div = document.createElement('div');
+    div.textContent = text == null ? '' : text;
+    return div.innerHTML;
+  }
+
+  function buildSideNav() {
+    var nav = document.getElementById('side-nav');
+    if (!nav) return;
+    var convs = document.querySelectorAll('.conversation');
+    if (convs.length < 2) { nav.style.display = 'none'; return; }
+    sideTicks = [];
+    convs.forEach(function(d) {
+      var gi = d.getAttribute('data-group-index');
+      var summary = d.querySelector('.conversation-summary');
+      var label = summary ? (summary.getAttribute('data-label') || '') : '';
+      var preview = summary ? (summary.getAttribute('data-preview') || '') : '';
+      var btn = document.createElement('button');
+      btn.className = 'side-nav-tick';
+      btn.type = 'button';
+      btn.dataset.groupIndex = gi;
+      btn.setAttribute('aria-label', label + ' ' + preview);
+      btn.innerHTML =
+        '<span class="side-nav-bar"></span>' +
+        '<span class="side-nav-tip"><span class="side-nav-tip-label">' + escapeHtml(label) + '</span>' +
+        (preview ? '<span class="side-nav-tip-text">' + escapeHtml(preview) + '</span>' : '') + '</span>';
+      btn.addEventListener('click', function() {
+        var g = parseInt(gi, 10);
+        var card = getConversationEl(g);
+        if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        setActiveGroup(g);
+      });
+      nav.appendChild(btn);
+      sideTicks.push(btn);
+    });
+
+    setupSideNavScrollSpy();
+  }
+
+  function setupSideNavScrollSpy() {
+    var convs = Array.prototype.slice.call(document.querySelectorAll('.conversation'));
+    if (!('IntersectionObserver' in window)) return;
+    var visible = {};
+    var io = new IntersectionObserver(function(entries) {
+      entries.forEach(function(e) {
+        var gi = parseInt(e.target.getAttribute('data-group-index'), 10);
+        if (e.isIntersecting) visible[gi] = e.intersectionRatio;
+        else delete visible[gi];
+      });
+      var best = -1, bestRatio = -1;
+      Object.keys(visible).forEach(function(k) {
+        var gi = parseInt(k, 10);
+        if (gi < best || best < 0) { /* prefer topmost */ }
+      });
+      // Choose the topmost visible conversation.
+      var keys = Object.keys(visible).map(function(k) { return parseInt(k, 10); }).sort(function(a, b) { return a - b; });
+      if (keys.length) best = keys[0];
+      if (best >= 0) setActiveGroup(best);
+    }, { rootMargin: '-10% 0px -70% 0px', threshold: [0, 0.01, 0.5, 1] });
+    convs.forEach(function(d) { io.observe(d); });
+  }
+
+  // ---------------------------------------------------------------------------
+  // Command palette (Cmd/Ctrl-K): commands + live transcript search.
+  // ---------------------------------------------------------------------------
+  function setupCommandPalette() {
+    var dlg = document.getElementById('cmdk');
+    var input = document.getElementById('cmdk-input');
+    var list = document.getElementById('cmdk-list');
+    var trigger = document.getElementById('cmdk-trigger');
+    if (!dlg || !input || !list) return;
+
+    var items = [];       // selectable: { label, sub, hint, run }
+    var selected = 0;
+    var searchToken = 0;
+    var debounceTimer = null;
+
+    var SHORTCUTS = [
+      ['n / j', 'next conversation'],
+      ['p / k', 'previous conversation'],
+      ['g / G', 'first / last conversation'],
+      ['⌘K / Ctrl-K', 'open this menu'],
+      ['?', 'keyboard shortcuts'],
+      ['Esc', 'close menu / detail'],
+    ];
+
+    function commands() {
+      var effective = (window.__ctTheme && window.__ctTheme.effective()) || 'dark';
+      var nextTheme = effective === 'dark' ? 'light' : 'dark';
+      var n = groupCount();
+      return [
+        { label: 'Keyboard shortcuts', hint: '?', run: showShortcuts, keep: true },
+        { label: 'Toggle theme — switch to ' + nextTheme, hint: '', run: function() { if (window.__ctTheme) window.__ctTheme.toggle(); } },
+        { label: 'Use system theme', hint: '', run: function() { if (window.__ctTheme) window.__ctTheme.system(); } },
+        { label: 'Open first conversation', hint: 'g', run: function() { openConversation(0); } },
+        { label: 'Open last conversation', hint: 'G', run: function() { openConversation(n - 1); } },
+      ];
     }
 
-    function closeModal() {
-      modal.close();
+    function open(prefill) {
+      if (!dlg.open) dlg.showModal();
+      input.value = prefill || '';
+      render(input.value);
+      requestAnimationFrame(function() { input.focus(); input.select(); });
+    }
+    function close() { if (dlg.open) dlg.close(); }
+
+    function setSelected(i) {
+      if (!items.length) return;
+      selected = (i + items.length) % items.length;
+      var rows = list.querySelectorAll('.cmdk-item');
+      rows.forEach(function(r, idx) {
+        var on = idx === selected;
+        r.classList.toggle('selected', on);
+        if (on) r.scrollIntoView({ block: 'nearest' });
+      });
     }
 
-    function escapeHtml(text) {
-      var div = document.createElement('div');
-      div.textContent = text;
-      return div.innerHTML;
+    function renderList(sections) {
+      // sections: [{ title, items: [...] }]
+      items = [];
+      var html = '';
+      sections.forEach(function(sec) {
+        if (!sec.items.length) return;
+        html += '<div class="cmdk-section-title">' + escapeHtml(sec.title) + '</div>';
+        sec.items.forEach(function(it) {
+          var i = items.length;
+          items.push(it);
+          html += '<div class="cmdk-item" role="option" data-i="' + i + '">' +
+            '<div class="cmdk-item-main">' +
+              '<div class="cmdk-item-label">' + (it.labelHtml || escapeHtml(it.label)) + '</div>' +
+              (it.sub ? '<div class="cmdk-item-sub">' + it.sub + '</div>' : '') +
+            '</div>' +
+            (it.hint ? '<kbd class="cmdk-item-hint">' + escapeHtml(it.hint) + '</kbd>' : '') +
+          '</div>';
+        });
+      });
+      if (!items.length) html = '<div class="cmdk-empty">No matches</div>';
+      list.innerHTML = html;
+      selected = 0;
+      setSelected(0);
+    }
+
+    function render(q) {
+      q = (q || '').trim();
+      var cmds = commands();
+      var filtered = q ? cmds.filter(function(c) { return c.label.toLowerCase().indexOf(q.toLowerCase()) !== -1; }) : cmds;
+      var sections = [{ title: 'Commands', items: filtered }, { title: 'Transcript', items: [] }];
+      renderList(sections);
+      if (q) liveSearch(q);
+    }
+
+    function showShortcuts() {
+      var html = '<div class="cmdk-section-title">Keyboard shortcuts</div>';
+      html += '<div class="cmdk-shortcuts">';
+      SHORTCUTS.forEach(function(s) {
+        html += '<div class="cmdk-shortcut"><kbd>' + escapeHtml(s[0]) + '</kbd><span>' + escapeHtml(s[1]) + '</span></div>';
+      });
+      html += '</div><div class="cmdk-empty">Type to search · Esc to close</div>';
+      list.innerHTML = html;
+      items = [];
     }
 
     function snippetFromHtml(html, q) {
       try {
         var tmp = document.createElement('div');
         tmp.innerHTML = html;
+        tmp.querySelectorAll('.message-meta').forEach(function(m) { m.remove(); });
         var msg = tmp.querySelector('.message');
         var text = (msg ? msg.textContent : tmp.textContent) || '';
         text = text.replace(/\s+/g, ' ').trim();
         var lower = text.toLowerCase();
         var qi = lower.indexOf(q.toLowerCase());
-        if (qi < 0) return text.slice(0, 180) + (text.length > 180 ? '…' : '');
-        var start = Math.max(0, qi - 60);
-        var end = Math.min(text.length, qi + q.length + 80);
+        if (qi < 0) return escapeHtml(text.slice(0, 140)) + (text.length > 140 ? '…' : '');
+        var start = Math.max(0, qi - 40);
+        var end = Math.min(text.length, qi + q.length + 70);
         var pre = text.slice(start, qi);
         var hit = text.slice(qi, qi + q.length);
         var post = text.slice(qi + q.length, end);
         return (start > 0 ? '…' : '') + escapeHtml(pre) + '<mark>' + escapeHtml(hit) + '</mark>' + escapeHtml(post) + (end < text.length ? '…' : '');
       } catch (e) {
-        return escapeHtml(String(html).slice(0, 200));
+        return escapeHtml(String(html).slice(0, 140));
       }
     }
 
     function yieldToUI() {
-      return new Promise(function(resolve) { window.requestAnimationFrame(function() { resolve(); }); });
+      return new Promise(function(resolve) { requestAnimationFrame(function() { resolve(); }); });
     }
 
-    async function performSearch(query) {
+    async function liveSearch(query) {
       var q = (query || '').trim();
-      if (!q) {
-        searchStatus.textContent = 'Enter a search term';
-        return;
-      }
-      searchResults.innerHTML = '';
-      searchStatus.textContent = 'Searching…';
+      var token = ++searchToken;
+      if (q.length < 2) return;
 
       var qLower = q.toLowerCase();
-      var found = 0;
-
+      var results = [];
+      var MAX = 40;
       var totalChunks = (meta.chunks || []).length;
-      for (var c = 0; c < totalChunks; c++) {
+
+      for (var c = 0; c < totalChunks && results.length < MAX; c++) {
         loadChunk(c);
         await waitForChunks([c]);
-        var items = CT.chunks[c] || [];
-        for (var i = 0; i < items.length; i++) {
+        if (token !== searchToken) return; // superseded by newer keystroke
+        var chunkItems = CT.chunks[c] || [];
+        for (var i = 0; i < chunkItems.length && results.length < MAX; i++) {
           var idx = c * meta.chunk_size + i;
-          if (idx < selStart || idx > selEnd) continue;
-          var html = items[i] || '';
-          if (!html) continue;
-          if (html.toLowerCase().indexOf(qLower) === -1) continue;
-
-          found++;
+          var html = chunkItems[i] || '';
+          if (!html || html.toLowerCase().indexOf(qLower) === -1) continue;
           var id = meta.ids && meta.ids[idx] ? meta.ids[idx] : '';
-          var k = kindLabel(kindCharAt(idx)).toUpperCase();
+          var k = kindLabel(kindCharAt(idx));
           var ts = meta.ts && meta.ts[idx] ? meta.ts[idx] : '';
-          var snippet = snippetFromHtml(html, q);
-
-          var div = document.createElement('div');
-          div.className = 'search-result';
-          div.innerHTML = '<a href="#' + escapeHtml(id) + '" data-index="' + idx + '">' +
-            '<small>' + escapeHtml(k) + ' · ' + escapeHtml(ts) + '</small>' +
-            '<div class="search-result-snippet">' + snippet + '</div>' +
-            '</a>';
-          searchResults.appendChild(div);
-
-          if (found % 10 === 0) await yieldToUI();
+          results.push({
+            label: k.toUpperCase() + ' · ' + ts,
+            sub: snippetFromHtml(html, q),
+            run: (function(ix, mid) { return function() { openConversation(groupIndexForMessage(ix), mid); }; })(idx, id),
+          });
         }
-        searchStatus.textContent = 'Found ' + found + ' result(s)…';
+        if (token !== searchToken) return;
         await yieldToUI();
       }
-      searchStatus.textContent = 'Found ' + found + ' result(s)';
+      if (token !== searchToken) return;
+
+      var cmds = commands();
+      var filtered = q ? cmds.filter(function(cc) { return cc.label.toLowerCase().indexOf(qLower) !== -1; }) : cmds;
+      renderList([{ title: 'Commands', items: filtered }, { title: 'Transcript · ' + results.length + (results.length >= MAX ? '+' : '') + ' match(es)', items: results }]);
     }
 
-    searchBtn.addEventListener('click', function() { openModal(searchInput.value); });
-    searchInput.addEventListener('keydown', function(e) {
-      if (e.key === 'Enter') openModal(searchInput.value);
+    function activate(i) {
+      var it = items[i];
+      if (!it) return;
+      if (it.keep) { it.run(); return; } // keep palette open (e.g. shortcuts view)
+      close();
+      it.run();
+    }
+
+    // Events
+    if (trigger) trigger.addEventListener('click', function() { open(''); });
+
+    input.addEventListener('input', function() {
+      if (debounceTimer) clearTimeout(debounceTimer);
+      var v = input.value;
+      // Commands render immediately; transcript search is debounced.
+      var cmds = commands();
+      var q = v.trim();
+      var filtered = q ? cmds.filter(function(c) { return c.label.toLowerCase().indexOf(q.toLowerCase()) !== -1; }) : cmds;
+      renderList([{ title: 'Commands', items: filtered }, { title: 'Transcript', items: [] }]);
+      debounceTimer = setTimeout(function() { if (q) liveSearch(q); }, 130);
     });
-    modalSearchBtn.addEventListener('click', function() { performSearch(modalInput.value); });
-    modalInput.addEventListener('keydown', function(e) {
-      if (e.key === 'Enter') performSearch(modalInput.value);
+
+    input.addEventListener('keydown', function(e) {
+      if (e.key === 'ArrowDown') { e.preventDefault(); setSelected(selected + 1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); setSelected(selected - 1); }
+      else if (e.key === 'Enter') { e.preventDefault(); activate(selected); }
+      else if (e.key === 'Escape') { e.preventDefault(); close(); }
     });
-    modalCloseBtn.addEventListener('click', closeModal);
-    modal.addEventListener('click', function(e) {
-      if (e.target === modal) closeModal();
+
+    list.addEventListener('click', function(e) {
+      var row = e.target && e.target.closest ? e.target.closest('.cmdk-item') : null;
+      if (!row) return;
+      activate(parseInt(row.getAttribute('data-i'), 10));
     });
-    searchResults.addEventListener('click', function(e) {
-      var a = e.target && e.target.closest ? e.target.closest('a[data-index]') : null;
-      if (!a) return;
-      e.preventDefault();
-      var idx = parseInt(a.getAttribute('data-index') || '0', 10);
-      closeModal();
-      scrollToIndex(idx);
+    list.addEventListener('mousemove', function(e) {
+      var row = e.target && e.target.closest ? e.target.closest('.cmdk-item') : null;
+      if (!row) return;
+      setSelected(parseInt(row.getAttribute('data-i'), 10));
+    });
+
+    dlg.addEventListener('click', function(e) {
+      if (e.target === dlg) close();
+    });
+    dlg.addEventListener('close', function() { input.value = ''; });
+
+    // Global open shortcut.
+    document.addEventListener('keydown', function(e) {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
+        e.preventDefault();
+        if (dlg.open) close(); else open('');
+      }
+    });
+
+    // Expose so the '?' handler can open directly to shortcuts.
+    CT.openShortcuts = function() { open(''); showShortcuts(); };
+    CT.openPalette = function() { open(''); };
+  }
+
+  // ---------------------------------------------------------------------------
+  // Keyboard navigation (between conversations)
+  // ---------------------------------------------------------------------------
+  function setupKeyboard() {
+    document.addEventListener('keydown', function(e) {
+      if (e.defaultPrevented) return;
+
+      if (e.key === 'Escape' && document.body.classList.contains('detail-open') && !isTextInputFocused()) {
+        e.preventDefault();
+        closeDetail();
+        return;
+      }
+
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (isTextInputFocused()) return;
+
+      var n = groupCount();
+      if (!n) return;
+      var cur = currentPaneGroup;
+
+      if (e.key === '?') { e.preventDefault(); if (CT.openShortcuts) CT.openShortcuts(); return; }
+      if (e.key === 'n' || e.key === 'j') { e.preventDefault(); openConversation(cur < 0 ? 0 : Math.min(n - 1, cur + 1)); return; }
+      if (e.key === 'p' || e.key === 'k') { e.preventDefault(); openConversation(cur < 0 ? 0 : Math.max(0, cur - 1)); return; }
+      if (e.key === 'g') { e.preventDefault(); openConversation(0); return; }
+      if (e.key === 'G') { e.preventDefault(); openConversation(n - 1); return; }
     });
   }
 
-  function setupConversationToggles() {
-    document.querySelectorAll('.conversation').forEach(function(d) {
-      d.addEventListener('toggle', function() {
-        if (d.open) {
-          var gidx = parseInt(d.getAttribute('data-group-index') || '0', 10);
-          loadConversation(gidx);
-        }
-      });
+  // ---------------------------------------------------------------------------
+  // Detail pane wiring: click a conversation card to open its full thread.
+  // ---------------------------------------------------------------------------
+  function setupDetailPane() {
+    pane = document.getElementById('detail-pane');
+    detailBody = document.getElementById('detail-body');
+    detailRole = document.getElementById('detail-role');
+    detailTime = document.getElementById('detail-time');
+    var closeBtn = document.getElementById('detail-close');
+    if (!pane || !detailBody) return;
+
+    if (closeBtn) closeBtn.addEventListener('click', closeDetail);
+
+    // Click a conversation card -> open its full thread in the pane.
+    document.addEventListener('click', function(e) {
+      if (!e.target || !e.target.closest) return;
+      if (e.target.closest('.detail-pane, .cmdk, .side-nav')) return;
+      var summary = e.target.closest('.conversation-summary');
+      if (!summary) return;
+      if (e.target.closest('a')) return; // let links inside the prompt work
+      e.preventDefault(); // don't toggle the <details> open inline
+      var d = summary.closest('.conversation');
+      if (!d) return;
+      var gidx = parseInt(d.getAttribute('data-group-index') || '0', 10);
+      // Clicking the already-open conversation closes the preview.
+      if (document.body.classList.contains('detail-open') && gidx === currentPaneGroup) {
+        closeDetail();
+        return;
+      }
+      openConversation(gidx);
     });
 
-    // Intercept clicks on timestamp permalinks so we can open the right group first.
-    document.addEventListener('click', function(e) {
+    // Timestamp permalinks inside the pane scroll within the pane.
+    detailBody.addEventListener('click', function(e) {
       var a = e.target && e.target.closest ? e.target.closest('a.timestamp-link') : null;
       if (!a) return;
-      var href = a.getAttribute('href') || '';
-      if (!href || href.charAt(0) !== '#') return;
-      var id = href.slice(1);
-      if (!id) return;
-      var idx = indexForId(id);
-      if (idx < 0) return;
       e.preventDefault();
-      scrollToIndex(idx);
+      var id = (a.getAttribute('href') || '').slice(1);
+      if (!id) return;
+      var t = detailBody.querySelector('[id="' + id + '"]');
+      if (t) t.scrollIntoView({ block: 'center' });
     });
+
+    CT.closeDetail = closeDetail;
+    CT.openConversation = openConversation;
   }
 
   function init() {
     if (!meta || !meta.total) return;
 
-    // Load first chunk eagerly (permits quick initial navigation).
     loadChunk(0);
-
     enhance(document);
 
+    buildSideNav();
+    setupDetailPane();
+    setupCommandPalette();
     setupKeyboard();
-    setupSearch();
-    setupConversationToggles();
 
-    // Minimap
-    resizeMinimap();
-    setupBrush();
-    setupTooltip();
-    updateBrushUI();
-    drawMinimap(activeIndex);
-
-    window.addEventListener('resize', function() { resizeMinimap(); });
-    var themeBtn = document.getElementById('theme-toggle');
-    if (themeBtn) themeBtn.addEventListener('click', function() { setTimeout(function() { drawMinimap(activeIndex); }, 20); });
-
-    // Hash navigation
     handleHash();
     window.addEventListener('hashchange', handleHash);
   }

@@ -18,6 +18,8 @@
 html,
 body {
   min-height: 100%;
+  background: #0d0d0f;
+  overscroll-behavior: none;
 }
 
 body {

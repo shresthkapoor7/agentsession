@@ -25,12 +25,27 @@ def test_generate_html_creates_single_file_html(tmp_path: Path):
     assert '<link rel="' not in index_html
     assert "<link href=" not in index_html
     assert "chunks[0]" in index_html
+    assert 'id="filter-time"' in index_html
+    assert 'id="filter-tokens"' in index_html
+    assert 'id="filter-duration"' in index_html
+    assert 'id="filter-activity"' in index_html
+    assert '"token_count": 3' in index_html
+    assert '"turn_context": true' in index_html
+    assert '"exec_count": 1' in index_html
 
     assert "Hello Codex" in index_html
     assert "echo hi" in index_html
 
     assert meta is not None
     assert stats.emitted_loglines > 0
+
+
+def test_generate_html_marks_interrupted_conversations_filterable(tmp_path: Path):
+    rollout = Path(__file__).parent / "sample_rollout_known_event_types.jsonl"
+    out_html, _meta, _stats = generate_html_from_rollout(rollout, tmp_path / "out")
+
+    index_html = out_html.read_text(encoding="utf-8")
+    assert '"interrupted": true' in index_html
 
 
 def test_generate_html_includes_format_drift_warning(tmp_path: Path):

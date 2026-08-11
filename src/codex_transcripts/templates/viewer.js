@@ -370,6 +370,92 @@
   }
 
   // ---------------------------------------------------------------------------
+  // Conversation filters: all checks are against compact per-group metadata, so
+  // filtering never forces transcript chunks to load.
+  // ---------------------------------------------------------------------------
+  function setupFilters() {
+    var time = document.getElementById('filter-time');
+    var tokens = document.getElementById('filter-tokens');
+    var duration = document.getElementById('filter-duration');
+    var tools = document.getElementById('filter-tools');
+    var activity = document.getElementById('filter-activity');
+    var clear = document.getElementById('clear-filters');
+    var results = document.getElementById('filter-results');
+    var empty = document.getElementById('filter-empty');
+    if (!time || !tokens || !duration || !tools || !activity || !clear || !results || !empty) return;
+
+    var controls = [time, tokens, duration, tools, activity];
+
+    function matchesTime(group, value) {
+      if (value === 'all') return true;
+      var ts = (meta.ts && meta.ts[group.start]) || '';
+      var hour = new Date(ts).getHours();
+      if (!isFinite(hour)) return false;
+      if (value === 'morning') return hour >= 5 && hour < 12;
+      if (value === 'afternoon') return hour >= 12 && hour < 18;
+      return hour >= 18 || hour < 5;
+    }
+
+    function matchesDuration(ms, value) {
+      if (value === 'all') return true;
+      if (value === 'under-1m') return ms < 60000;
+      if (value === '1-5m') return ms >= 60000 && ms < 300000;
+      return ms >= 300000;
+    }
+
+    function matchesActivity(filters, value) {
+      if (value === 'all') return true;
+      if (value === 'exec') return filters.exec_count > 0;
+      if (value === 'turn-context') return filters.turn_context === true;
+      if (value === 'interrupted') return filters.interrupted === true;
+      if (value === 'compacted') return filters.context_compacted === true;
+      if (value === 'commits') return filters.commits > 0;
+      return true;
+    }
+
+    function applyFilters() {
+      var groups = meta.groups || [];
+      var active = controls.some(function(control) { return control.value !== 'all'; });
+      var visible = 0;
+
+      groups.forEach(function(group, index) {
+        var filters = group.filters || {};
+        var match = matchesTime(group, time.value) &&
+          (tokens.value === 'all' || (filters.token_count || 0) >= parseInt(tokens.value, 10)) &&
+          matchesDuration(filters.duration_ms || 0, duration.value) &&
+          (tools.value === 'all' || (filters.tool_calls || 0) >= parseInt(tools.value, 10)) &&
+          matchesActivity(filters, activity.value);
+        var card = getConversationEl(index);
+        if (card) card.classList.toggle('filtered-out', !match);
+        if (match) visible += 1;
+      });
+
+      sideTicks.forEach(function(tick) {
+        var card = getConversationEl(parseInt(tick.dataset.groupIndex || '-1', 10));
+        tick.hidden = !card || card.classList.contains('filtered-out');
+      });
+      var nav = document.getElementById('side-nav');
+      if (nav) nav.style.display = visible < 2 ? 'none' : '';
+
+      empty.hidden = visible !== 0;
+      results.textContent = active ? 'Showing ' + visible + ' of ' + groups.length + ' conversations' : '';
+      clear.hidden = !active;
+      if (currentPaneGroup >= 0) {
+        var activeCard = getConversationEl(currentPaneGroup);
+        if (activeCard && activeCard.classList.contains('filtered-out')) closeDetail();
+      }
+    }
+
+    controls.forEach(function(control) { control.addEventListener('change', applyFilters); });
+    clear.addEventListener('click', function() {
+      controls.forEach(function(control) { control.value = 'all'; });
+      applyFilters();
+      time.focus();
+    });
+    applyFilters();
+  }
+
+  // ---------------------------------------------------------------------------
   // Command palette (Cmd/Ctrl-K): commands + live transcript search.
   // ---------------------------------------------------------------------------
   function setupCommandPalette() {
@@ -674,6 +760,7 @@
     enhance(document);
 
     buildSideNav();
+    setupFilters();
     setupDetailPane();
     setupCommandPalette();
     setupKeyboard();

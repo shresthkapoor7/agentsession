@@ -19,7 +19,7 @@ type Transcript = {
   systemRollout: Record<string, number>;
   systemEvent: Record<string, number>;
   systemResponse: Record<string, number>;
-  statEvents: Array<{ ts: string; name: string }>;
+  statEvents: Array<{ ts: string; name: string; tokenCount?: number }>;
 };
 
 // Record types the CLI viewer renders/handles (so they are NOT counted as
@@ -49,6 +49,15 @@ function prettyValue(value: unknown) {
   }
 }
 
+function tokenCountFromPayload(payload: Record<string, unknown>) {
+  const info = payload.info;
+  if (!info || typeof info !== "object") return 0;
+  const usage = (info as Record<string, unknown>).last_token_usage ?? (info as Record<string, unknown>).total_token_usage;
+  if (!usage || typeof usage !== "object") return 0;
+  const count = (usage as Record<string, unknown>).total_tokens;
+  return typeof count === "number" && Number.isFinite(count) && count >= 0 ? count : 0;
+}
+
 function parseCodexRollout(raw: string, filename: string): Transcript {
   const entries: TranscriptEntry[] = [];
   let cwd: string | null = null;
@@ -56,7 +65,7 @@ function parseCodexRollout(raw: string, filename: string): Transcript {
   const systemRollout: Record<string, number> = {};
   const systemEvent: Record<string, number> = {};
   const systemResponse: Record<string, number> = {};
-  const statEvents: Array<{ ts: string; name: string }> = [];
+  const statEvents: Array<{ ts: string; name: string; tokenCount?: number }> = [];
   const bump = (map: Record<string, number>, key: string) => { map[key] = (map[key] ?? 0) + 1; };
 
   for (const line of raw.split("\n")) {
@@ -98,7 +107,7 @@ function parseCodexRollout(raw: string, filename: string): Transcript {
           timestamp,
         });
       } else if (eventType === "token_count") {
-        statEvents.push({ ts: timestamp, name: "token_count" });
+        statEvents.push({ ts: timestamp, name: "token_count", tokenCount: tokenCountFromPayload(data) });
       } else if (!HANDLED_EVENT.has(eventType)) {
         bump(systemEvent, eventType || "(missing)");
       }
@@ -194,12 +203,12 @@ function viewerMessageHtml(entry: TranscriptEntry, index: number) {
 
 function viewerDocument(transcript: Transcript) {
   const groups = groupConversation(transcript.entries);
-  const taskDurations = groups.flatMap((group) => {
-    if (!group.some((entry) => entry.kind === "user")) return [];
+  const groupDurations = groups.map((group) => {
     const start = Date.parse(group[0].timestamp);
     const end = Date.parse(group[group.length - 1].timestamp);
-    return Number.isFinite(start) && Number.isFinite(end) ? [Math.max(0, end - start)] : [];
+    return Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, end - start) : 0;
   });
+  const taskDurations = groups.flatMap((group, index) => group.some((entry) => entry.kind === "user") ? [groupDurations[index]] : []);
   const durationLabel = (milliseconds: number) => {
     const seconds = Math.floor(milliseconds / 1000);
     if (seconds < 60) return `${seconds}s`;
@@ -225,7 +234,24 @@ function viewerDocument(transcript: Transcript) {
     const groupIndex = groupIndexForTs(event.ts);
     if (statCounts[groupIndex]) statCounts[groupIndex][event.name] = (statCounts[groupIndex][event.name] ?? 0) + 1;
   }
-  const taskSummary = taskDurations.length ? ` · ⏱ task time avg ${durationLabel(Math.floor(taskDurations.reduce((total, value) => total + value, 0) / taskDurations.length))} · min ${durationLabel(Math.min(...taskDurations))} · max ${durationLabel(Math.max(...taskDurations))}` : "";
+  const groupFilters = groups.map((group, index) => {
+    const tokenCount = transcript.statEvents.reduce((latest, event) =>
+      groupIndexForTs(event.ts) === index && event.name === "token_count" ? (event.tokenCount ?? latest) : latest, 0);
+    const tools = group.filter((entry) => entry.kind === "tool");
+    return {
+      duration_ms: groupDurations[index],
+      token_count: tokenCount,
+      tool_calls: tools.length,
+      exec_count: tools.filter((entry) => aliasTool(entry.label) === "exec").length,
+      turn_context: transcript.statEvents.some((event) => groupIndexForTs(event.ts) === index && event.name === "turn_context"),
+      interrupted: group.some((entry) => entry.kind === "notice" && entry.content.toLowerCase().includes("turn aborted")),
+      context_compacted: group.some((entry) => entry.kind === "notice" && entry.content.toLowerCase().includes("context compacted")),
+      commits: group.filter((entry) => entry.kind === "result").some((entry) => /\[[\w/-]+ [a-f0-9]{7,}\]/i.test(entry.content)) ? 1 : 0,
+    };
+  });
+  const avgMs = taskDurations.length ? Math.floor(taskDurations.reduce((total, value) => total + value, 0) / taskDurations.length) : 0;
+  const minMs = taskDurations.length ? Math.min(...taskDurations) : 0;
+  const maxMs = taskDurations.length ? Math.max(...taskDurations) : 0;
   const items = transcript.entries.map(viewerMessageHtml);
   let start = 0;
   const summary = groups.map((group, index) => {
@@ -243,7 +269,7 @@ function viewerDocument(transcript: Transcript) {
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
       .map(([name, count]) => `${count} ${name}`)
       .join(" · ");
-    const durationMs = group.length > 1 ? Math.max(0, Date.parse(group[group.length - 1].timestamp) - Date.parse(group[0].timestamp)) : 0;
+    const durationMs = groupDurations[index];
     const metaExtra = [statsStr, `⏱ ${durationLabel(durationMs)}`].filter(Boolean).join(" · ");
     const html = `<details class="conversation index-item" data-group-index="${index}" data-start="${start}" data-end="${end}"><summary class="conversation-summary" data-preview="${escapeHtml(prompt)}" data-label="#${index + 1}"><div class="index-item-content conversation-prompt"><p>${renderInline(prompt)}</p></div><div class="conversation-meta"><span class="index-item-number">#${index + 1}</span><span class="conversation-jump"><time datetime="${group[0].timestamp}">${group[0].timestamp}</time></span><span class="conversation-stats-line">· ${metaExtra}</span></div>${responseHtml}</summary><div class="conversation-body"><div class="conversation-messages" id="group-${index}"></div></div></details>`;
     start = end + 1;
@@ -258,8 +284,18 @@ function viewerDocument(transcript: Transcript) {
   const noticeHtml = systemTotal
     ? `<div class="system-records-notice"><div class="system-records-notice-title">System/internal records: ${systemTotal}</div><div class="system-records-notice-subtitle">Internal Codex records not shown in the transcript, grouped by type.</div><details><summary>Details (counts by type)</summary>${noticeSection("rollout", transcript.systemRollout)}${noticeSection("event_msg", transcript.systemEvent)}${noticeSection("response_item", transcript.systemResponse)}</details></div>`
     : "";
-  const meta = { format: "codex-transcripts.viewer.v3", total: items.length, chunk_size: 200, chunks: [""], kinds: transcript.entries.map((entry) => entry.kind[0]).join(""), ids: items.map((_, index) => `msg-${index}`), ts: transcript.entries.map((entry) => entry.timestamp), groups: groups.map((group, index) => ({ start: groups.slice(0, index).reduce((total, item) => total + item.length, 0), end: groups.slice(0, index + 1).reduce((total, item) => total + item.length, 0) - 1, prompt: group.find((entry) => entry.kind === "user")?.content ?? null })) };
-  return `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/codex-transcripts.css"></head><body><div class="container"><div class="header-row"><h1>Codex transcript</h1><button id="cmdk-trigger" class="cmdk-trigger" type="button">Search <kbd class="cmdk-trigger-kbd">⌘K</kbd></button></div><p class="viewer-summary">${groups.length} conversations · ${items.length} messages${taskSummary}</p>${noticeHtml}<nav id="side-nav" class="side-nav" aria-label="Jump between conversations"></nav><div id="conversations" class="conversations">${summary}</div><aside id="detail-pane" class="detail-pane" aria-hidden="true"><div class="detail-header"><span class="detail-role" id="detail-role"></span><span class="detail-time" id="detail-time"></span><button class="detail-close" id="detail-close">×</button></div><div class="detail-body" id="detail-body"></div></aside><dialog id="cmdk" class="cmdk"><div class="cmdk-box"><div class="cmdk-input-row"><input id="cmdk-input" placeholder="Search commands and transcript…"></div><div id="cmdk-list" class="cmdk-list"></div><div class="cmdk-footer"><span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span><span><kbd>↵</kbd> Select</span><span><kbd>Esc</kbd> Close</span></div></div></dialog></div><script>window.__CODEX_TRANSCRIPTS_META__=${JSON.stringify(meta)};window.__CODEX_TRANSCRIPTS__={chunks:{0:${JSON.stringify(items)}}};</script><script src="/codex-transcripts-viewer.js"></script></body></html>`;
+  const sortHtml = `<section class="conversation-sort" aria-label="Sort conversations"><span class="conversation-sort-heading">Sort by</span><div class="sort-controls" role="group"><button class="sort-btn active" data-field="index" type="button">Order<span class="sort-caret">↑</span></button><button class="sort-btn" data-field="tokens" type="button">Tokens<span class="sort-caret"></span></button><button class="sort-btn" data-field="duration" type="button">Time taken<span class="sort-caret"></span></button><button class="sort-btn" data-field="tools" type="button">Tool calls<span class="sort-caret"></span></button></div></section>`;
+  const stat = (inner: string) => `<span class="stat">${inner}</span>`;
+  const summaryHtml =
+    `<div class="viewer-summary">` +
+    stat(`<b>${groups.length}</b> conversations`) +
+    stat(`<b>${items.length}</b> messages`) +
+    (taskDurations.length
+      ? stat(`⏱ avg <b>${durationLabel(avgMs)}</b>`) + stat(`min <b>${durationLabel(minMs)}</b>`) + stat(`max <b>${durationLabel(maxMs)}</b>`)
+      : "") +
+    `</div>`;
+  const meta = { format: "codex-transcripts.viewer.v3", total: items.length, chunk_size: 200, chunks: [""], kinds: transcript.entries.map((entry) => entry.kind[0]).join(""), ids: items.map((_, index) => `msg-${index}`), ts: transcript.entries.map((entry) => entry.timestamp), groups: groups.map((group, index) => ({ start: groups.slice(0, index).reduce((total, item) => total + item.length, 0), end: groups.slice(0, index + 1).reduce((total, item) => total + item.length, 0) - 1, prompt: group.find((entry) => entry.kind === "user")?.content ?? null, filters: groupFilters[index] })) };
+  return `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/codex-transcripts.css"></head><body><div class="container"><div class="header-row"><h1>Codex transcript</h1><button id="cmdk-trigger" class="cmdk-trigger" type="button"><svg class="cmdk-trigger-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg><span class="cmdk-trigger-label">Search</span><kbd class="cmdk-trigger-kbd">⌘K</kbd></button></div><div class="summary-row">${summaryHtml}${sortHtml}</div>${noticeHtml}<nav id="side-nav" class="side-nav" aria-label="Jump between conversations"></nav><div id="conversations" class="conversations">${summary}</div><aside id="detail-pane" class="detail-pane" aria-hidden="true"><div class="detail-header"><span class="detail-role" id="detail-role"></span><span class="detail-time" id="detail-time"></span><button class="detail-close" id="detail-close">×</button></div><div class="detail-body" id="detail-body"></div></aside><dialog id="cmdk" class="cmdk"><div class="cmdk-box"><div class="cmdk-input-row"><input id="cmdk-input" placeholder="Search commands and transcript…"></div><div id="cmdk-list" class="cmdk-list"></div><div class="cmdk-footer"><span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span><span><kbd>↵</kbd> Select</span><span><kbd>Esc</kbd> Close</span></div></div></dialog></div><script>window.__CODEX_TRANSCRIPTS_META__=${JSON.stringify(meta)};window.__CODEX_TRANSCRIPTS__={chunks:{0:${JSON.stringify(items)}}};</script><script src="/codex-transcripts-viewer.js"></script></body></html>`;
 }
 
 type ProviderKey = "codex" | "claude";

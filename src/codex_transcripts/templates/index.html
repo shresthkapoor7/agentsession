@@ -14,6 +14,20 @@
 
         <p class="viewer-summary">{{ total_groups }} conversations · {{ total_messages }} messages{% if task_time_summary %} · ⏱ {{ task_time_summary }}{% endif %}</p>
 
+        <section class="conversation-filters" aria-label="Filter conversations">
+            <div class="conversation-filters-heading">Filter conversations</div>
+            <div class="conversation-filter-controls">
+                <label class="conversation-filter"><span>Time</span><select id="filter-time"><option value="all">Any time</option><option value="morning">Morning</option><option value="afternoon">Afternoon</option><option value="evening">Evening</option></select></label>
+                <label class="conversation-filter"><span>Tokens</span><select id="filter-tokens"><option value="all">Any volume</option><option value="1000">1K+</option><option value="10000">10K+</option><option value="50000">50K+</option></select></label>
+                <label class="conversation-filter"><span>Time taken</span><select id="filter-duration"><option value="all">Any duration</option><option value="under-1m">Under 1 min</option><option value="1-5m">1–5 min</option><option value="5m-plus">5+ min</option></select></label>
+                <label class="conversation-filter"><span>Tool calls</span><select id="filter-tools"><option value="all">Any activity</option><option value="1">1+</option><option value="5">5+</option><option value="20">20+</option></select></label>
+                <label class="conversation-filter"><span>Contains</span><select id="filter-activity"><option value="all">Anything</option><option value="exec">Exec</option><option value="turn-context">Turn context</option><option value="interrupted">Interrupted</option><option value="compacted">Context compacted</option><option value="commits">Commits</option></select></label>
+                <button class="clear-filters" id="clear-filters" type="button" hidden>Clear all</button>
+            </div>
+            <p class="filter-results" id="filter-results" aria-live="polite"></p>
+        </section>
+        <p class="filter-empty" id="filter-empty" hidden>No conversations match these filters.</p>
+
         {% if import_command %}
         <div class="share-notice">
             <div class="share-notice-title">Import this session on another machine</div>

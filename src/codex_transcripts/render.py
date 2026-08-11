@@ -688,6 +688,17 @@ a.control-btn { text-decoration: none; }
 
 /* Viewer (index.html) */
 .viewer-summary { margin: 0 0 12px 0; color: var(--text-muted); font-size: 0.9rem; }
+.conversation-filters { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin: 0 0 16px; padding: 12px 14px; border: 1px solid var(--border-subtle); border-radius: 12px; background: var(--surface-bg); }
+.conversation-filters-heading { font-size: 0.72rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); white-space: nowrap; }
+.conversation-filter-controls { display: flex; align-items: flex-end; gap: 8px; flex: 1; flex-wrap: wrap; }
+.conversation-filter { display: grid; gap: 4px; color: var(--text-muted); font-size: 0.66rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; }
+.conversation-filter select { min-height: 32px; padding: 5px 28px 5px 9px; border: 1px solid var(--border); border-radius: 7px; background: var(--card-bg); color: var(--text-color); font: inherit; font-size: 0.78rem; font-weight: 500; letter-spacing: 0; text-transform: none; cursor: pointer; }
+.conversation-filter select:hover { border-color: var(--text-muted); }
+.clear-filters { min-height: 32px; padding: 5px 9px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--accent); font: inherit; font-size: 0.78rem; cursor: pointer; }
+.clear-filters:hover { background: var(--hover-bg); }
+.filter-results { margin: 0; color: var(--text-muted); font-size: 0.76rem; white-space: nowrap; }
+.filter-empty { margin: 4px 0 16px; padding: 14px; border: 1px dashed var(--border); border-radius: 10px; color: var(--text-muted); font-size: 0.88rem; text-align: center; }
+@media (max-width: 720px) { .conversation-filters { align-items: stretch; } .conversation-filter-controls { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); } .conversation-filter { min-width: 0; } .conversation-filter select { width: 100%; } .clear-filters { justify-self: start; } .filter-results { width: 100%; } }
 .message.active { box-shadow: 0 0 0 2px color-mix(in srgb, var(--user-border) 65%, transparent), 0 1px 3px var(--shadow-color); }
 .conversations { margin-top: 12px; transition: filter 0.2s ease; }
 body.detail-open .conversations { filter: brightness(0.82); }

@@ -13,8 +13,20 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Local Transcript Viewer",
-  description: "Choose a local Claude Code or Codex transcript.",
+  applicationName: "agentsession",
+  title: { default: "agentsession", template: "%s · agentsession" },
+  description: "View a local Codex session with a clean transcript interface. Processed entirely in your browser — nothing is uploaded.",
+  openGraph: {
+    title: "agentsession",
+    description: "View a local Codex session with a clean transcript interface.",
+    siteName: "agentsession",
+    type: "website",
+  },
+  twitter: {
+    card: "summary",
+    title: "agentsession",
+    description: "View a local Codex session with a clean transcript interface.",
+  },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

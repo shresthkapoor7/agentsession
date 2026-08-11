@@ -1,69 +1,304 @@
-import Image from "next/image";
+"use client";
+
+import { useRef, useState } from "react";
+
+type EntryKind = "user" | "assistant" | "tool" | "result" | "notice";
+
+type TranscriptEntry = {
+  content: string;
+  kind: EntryKind;
+  label: string;
+  timestamp: string;
+};
+
+type Transcript = {
+  cwd: string | null;
+  entries: TranscriptEntry[];
+  id: string | null;
+  filename: string;
+  systemRollout: Record<string, number>;
+  systemEvent: Record<string, number>;
+  systemResponse: Record<string, number>;
+};
+
+// Record types the CLI viewer renders/handles (so they are NOT counted as
+// "system/internal records"). Kept in sync with src/codex_transcripts/rollout.py.
+const HANDLED_ROLLOUT = new Set(["session_meta", "event_msg", "response_item", "compacted", "turn_context"]);
+const HANDLED_EVENT = new Set(["user_message", "agent_message", "context_compacted", "turn_aborted", "agent_reasoning", "agent_reasoning_raw_content", "token_count"]);
+const HANDLED_ITEM = new Set(["function_call", "custom_tool_call", "local_shell_call", "web_search_call", "function_call_output", "custom_tool_call_output", "local_shell_call_output", "message", "reasoning"]);
+
+type FilePickerHandle = { getFile: () => Promise<File>; name: string };
+type FilePickerWindow = Window & {
+  showOpenFilePicker?: (options: {
+    multiple?: boolean;
+    types?: Array<{ description: string; accept: Record<string, string[]> }>;
+  }) => Promise<FilePickerHandle[]>;
+};
+
+function stringValue(value: unknown) {
+  return typeof value === "string" ? value : "";
+}
+
+function prettyValue(value: unknown) {
+  if (typeof value === "string") return value;
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return "(unavailable)";
+  }
+}
+
+function parseCodexRollout(raw: string, filename: string): Transcript {
+  const entries: TranscriptEntry[] = [];
+  let cwd: string | null = null;
+  let id: string | null = null;
+  const systemRollout: Record<string, number> = {};
+  const systemEvent: Record<string, number> = {};
+  const systemResponse: Record<string, number> = {};
+  const bump = (map: Record<string, number>, key: string) => { map[key] = (map[key] ?? 0) + 1; };
+
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+
+    let record: { timestamp?: unknown; type?: unknown; payload?: unknown };
+    try {
+      record = JSON.parse(line);
+    } catch {
+      continue;
+    }
+
+    const timestamp = stringValue(record.timestamp);
+    const payload = record.payload;
+    if (!timestamp || !payload || typeof payload !== "object") continue;
+    const data = payload as Record<string, unknown>;
+
+    if (record.type === "session_meta") {
+      cwd = stringValue(data.cwd) || cwd;
+      id = stringValue(data.id) || id;
+      continue;
+    }
+
+    if (record.type === "event_msg") {
+      const eventType = stringValue(data.type);
+      const message = stringValue(data.message);
+      if (eventType === "user_message" && message.trim()) {
+        entries.push({ content: message, kind: "user", label: "You", timestamp });
+      } else if (eventType === "agent_message" && message.trim()) {
+        entries.push({ content: message, kind: "assistant", label: "Codex", timestamp });
+      } else if (eventType === "context_compacted") {
+        entries.push({ content: "Context compacted", kind: "notice", label: "Session", timestamp });
+      } else if (eventType === "turn_aborted") {
+        const reason = stringValue(data.reason);
+        entries.push({
+          content: reason ? `Turn aborted: ${reason}` : "Turn aborted",
+          kind: "notice",
+          label: "Session",
+          timestamp,
+        });
+      } else if (!HANDLED_EVENT.has(eventType)) {
+        bump(systemEvent, eventType || "(missing)");
+      }
+      continue;
+    }
+
+    if (record.type !== "response_item") {
+      const rolloutType = stringValue(record.type);
+      if (rolloutType && !HANDLED_ROLLOUT.has(rolloutType)) bump(systemRollout, rolloutType);
+      continue;
+    }
+    const itemType = stringValue(data.type);
+    if (["function_call", "custom_tool_call", "local_shell_call"].includes(itemType)) {
+      const name = stringValue(data.name) || itemType;
+      const input = data.arguments ?? data.input ?? data;
+      entries.push({ content: prettyValue(input), kind: "tool", label: name, timestamp });
+    } else if (["function_call_output", "custom_tool_call_output", "local_shell_call_output"].includes(itemType)) {
+      const output = data.output ?? data.content ?? data;
+      entries.push({ content: prettyValue(output), kind: "result", label: "Tool result", timestamp });
+    } else if (!HANDLED_ITEM.has(itemType)) {
+      bump(systemResponse, itemType || "(missing)");
+    }
+  }
+
+  if (!id && entries.length === 0) {
+    throw new Error("This file does not contain readable Codex rollout records.");
+  }
+
+  return { cwd, entries, filename, id, systemRollout, systemEvent, systemResponse };
+}
+
+function groupConversation(entries: TranscriptEntry[]) {
+  const groups: TranscriptEntry[][] = [];
+  let current: TranscriptEntry[] = [];
+  for (const entry of entries) {
+    if (entry.kind === "user" && current.length) { groups.push(current); current = []; }
+    current.push(entry);
+  }
+  if (current.length) groups.push(current);
+  return groups;
+}
+
+function escapeHtml(value: string) {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+function viewerMessageHtml(entry: TranscriptEntry, index: number) {
+  const id = `msg-${index}`;
+  const content = escapeHtml(entry.content);
+  const body = entry.kind === "user" ? `<div class="user-content"><p>${content}</p></div>`
+    : entry.kind === "assistant" ? `<div class="assistant-text"><p>${content}</p></div>`
+    : entry.kind === "tool" ? `<div class="tool-use"><div class="tool-header"><span class="tool-icon">⚙</span>${escapeHtml(entry.label)}</div><pre>${content}</pre></div>`
+    : entry.kind === "result" ? `<div class="tool-result"><pre>${content}</pre></div>`
+    : `<div class="thinking"><div class="thinking-label">Session</div><p>${content}</p></div>`;
+  const messageClass = entry.kind === "result" ? "tool-reply" : entry.kind === "notice" ? "system" : entry.kind;
+  return `<div class="message ${messageClass}" id="${id}"><div class="message-content">${body}</div><div class="message-meta"><span class="role-label">${escapeHtml(entry.label)}</span><a href="#${id}" class="timestamp-link"><time datetime="${entry.timestamp}">${entry.timestamp}</time></a></div></div>`;
+}
+
+function viewerDocument(transcript: Transcript) {
+  const groups = groupConversation(transcript.entries);
+  const taskDurations = groups.flatMap((group) => {
+    if (!group.some((entry) => entry.kind === "user")) return [];
+    const start = Date.parse(group[0].timestamp);
+    const end = Date.parse(group[group.length - 1].timestamp);
+    return Number.isFinite(start) && Number.isFinite(end) ? [Math.max(0, end - start)] : [];
+  });
+  const durationLabel = (milliseconds: number) => {
+    const seconds = Math.floor(milliseconds / 1000);
+    return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+  };
+  const taskSummary = taskDurations.length ? ` · ⏱ task time avg ${durationLabel(Math.floor(taskDurations.reduce((total, value) => total + value, 0) / taskDurations.length))} · min ${durationLabel(Math.min(...taskDurations))} · max ${durationLabel(Math.max(...taskDurations))}` : "";
+  const items = transcript.entries.map(viewerMessageHtml);
+  let start = 0;
+  const summary = groups.map((group, index) => {
+    const end = start + group.length - 1;
+    const prompt = group.find((entry) => entry.kind === "user")?.content ?? "(session start)";
+    const response = [...group].reverse().find((entry) => entry.kind === "assistant")?.content ?? "";
+    const responsePreview = response.replace(/\s+/g, " ").trim().slice(0, 240) + (response.length > 240 ? "…" : "");
+    const responseHtml = responsePreview
+      ? `<div class="conversation-response"><span class="conversation-response-label">Codex</span><div class="conversation-response-text"><p>${escapeHtml(responsePreview)}</p></div></div>`
+      : "";
+    const html = `<details class="conversation index-item" data-group-index="${index}" data-start="${start}" data-end="${end}"><summary class="conversation-summary" data-preview="${escapeHtml(prompt)}" data-label="#${index + 1}"><div class="index-item-content conversation-prompt"><p>${escapeHtml(prompt)}</p></div><div class="conversation-meta"><span class="index-item-number">#${index + 1}</span><span class="conversation-jump"><time datetime="${group[0].timestamp}">${group[0].timestamp}</time></span><span class="conversation-stats-line">· ${group.length} messages</span></div>${responseHtml}</summary><div class="conversation-body"><div class="conversation-messages" id="group-${index}"></div></div></details>`;
+    start = end + 1;
+    return html;
+  }).join("");
+  const noticeSection = (title: string, counts: Record<string, number>) =>
+    Object.keys(counts).length
+      ? `<div class="system-records-notice-section"><div class="system-records-notice-section-title">${title}</div><pre class="json">${escapeHtml(JSON.stringify(counts, null, 2))}</pre></div>`
+      : "";
+  const systemTotal = [transcript.systemRollout, transcript.systemEvent, transcript.systemResponse]
+    .reduce((total, counts) => total + Object.values(counts).reduce((sum, value) => sum + value, 0), 0);
+  const noticeHtml = systemTotal
+    ? `<div class="system-records-notice"><div class="system-records-notice-title">System/internal records: ${systemTotal}</div><div class="system-records-notice-subtitle">Internal Codex records not shown in the transcript, grouped by type.</div><details><summary>Details (counts by type)</summary>${noticeSection("rollout", transcript.systemRollout)}${noticeSection("event_msg", transcript.systemEvent)}${noticeSection("response_item", transcript.systemResponse)}</details></div>`
+    : "";
+  const meta = { format: "codex-transcripts.viewer.v3", total: items.length, chunk_size: 200, chunks: [""], kinds: transcript.entries.map((entry) => entry.kind[0]).join(""), ids: items.map((_, index) => `msg-${index}`), ts: transcript.entries.map((entry) => entry.timestamp), groups: groups.map((group, index) => ({ start: groups.slice(0, index).reduce((total, item) => total + item.length, 0), end: groups.slice(0, index + 1).reduce((total, item) => total + item.length, 0) - 1, prompt: group.find((entry) => entry.kind === "user")?.content ?? null })) };
+  return `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/codex-transcripts.css"></head><body><div class="container"><div class="header-row"><h1>Codex transcript</h1><button id="cmdk-trigger" class="cmdk-trigger" type="button">Search <kbd class="cmdk-trigger-kbd">⌘K</kbd></button></div><p class="viewer-summary">${groups.length} conversations · ${items.length} messages${taskSummary}</p>${noticeHtml}<nav id="side-nav" class="side-nav" aria-label="Jump between conversations"></nav><div id="conversations" class="conversations">${summary}</div><aside id="detail-pane" class="detail-pane" aria-hidden="true"><div class="detail-header"><span class="detail-role" id="detail-role"></span><span class="detail-time" id="detail-time"></span><button class="detail-close" id="detail-close">×</button></div><div class="detail-body" id="detail-body"></div></aside><dialog id="cmdk" class="cmdk"><div class="cmdk-box"><div class="cmdk-input-row"><input id="cmdk-input" placeholder="Search commands and transcript…"></div><div id="cmdk-list" class="cmdk-list"></div><div class="cmdk-footer"><span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span><span><kbd>↵</kbd> Select</span><span><kbd>Esc</kbd> Close</span></div></div></dialog></div><script>window.__CODEX_TRANSCRIPTS_META__=${JSON.stringify(meta)};window.__CODEX_TRANSCRIPTS__={chunks:{0:${JSON.stringify(items)}}};</script><script src="/codex-transcripts-viewer.js"></script></body></html>`;
+}
 
 export default function Home() {
-  return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
-          </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [transcript, setTranscript] = useState<Transcript | null>(null);
+  const [pathCopied, setPathCopied] = useState(false);
+  const fallbackInput = useRef<HTMLInputElement>(null);
+
+  async function loadCodexFile(file: File) {
+    setIsLoading(true);
+    setError(null);
+    try {
+      setTranscript(parseCodexRollout(await file.text(), file.name));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Could not read this transcript.");
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  async function openCodexPicker() {
+    setError(null);
+    try {
+      await navigator.clipboard.writeText("~/.codex/sessions");
+      setPathCopied(true);
+    } catch {
+      setPathCopied(false);
+    }
+    const picker = (window as FilePickerWindow).showOpenFilePicker;
+    if (!picker) {
+      fallbackInput.current?.click();
+      return;
+    }
+
+    try {
+      const [handle] = await picker({
+        multiple: false,
+        types: [{ description: "Codex rollout", accept: { "application/json": [".jsonl"] } }],
+      });
+      if (handle) await loadCodexFile(await handle.getFile());
+    } catch (caught) {
+      if (caught instanceof DOMException && caught.name === "AbortError") return;
+      setError("The file picker could not be opened. Please try again.");
+    }
+  }
+
+  if (transcript) {
+    return <iframe className="codex-transcript-frame" srcDoc={viewerDocument(transcript)} title="Codex transcript" />;
+    /*
+    const groups = groupConversation(transcript.entries);
+    const matches = groups.map((group, index) => ({ group, index })).filter(({ group }) =>
+      group.some((entry) => `${entry.label} ${entry.content}`.toLowerCase().includes(search.toLowerCase()))
+    );
+    return (
+      <main className="codex-viewer">
+        <div className="container">
+          <div className="header-row">
+            <h1>Codex transcript</h1>
+            <div className="header-controls"><button className="viewer-control" onClick={() => setSearchOpen(true)} type="button">Search <kbd>⌘K</kbd></button><button className="viewer-control" onClick={() => setTranscript(null)} type="button">Choose another file</button></div>
+          </div>
+          <p className="viewer-summary">
+            {transcript.entries.length} messages · {transcript.cwd ?? transcript.filename}
           </p>
-        </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+          <nav className="side-nav" aria-label="Jump between conversations">{groups.map((group, index) => <a href={`#turn-${index}`} key={index}>#{index + 1}</a>)}</nav>
+          <section className="conversations" aria-label="Codex conversation">
+            {groups.map((group, groupIndex) => {
+              const prompt = group.find((entry) => entry.kind === "user");
+              const response = [...group].reverse().find((entry) => entry.kind === "assistant");
+              return <details className="conversation index-item" id={`turn-${groupIndex}`} key={groupIndex} open={groupIndex === 0}>
+                <summary className="conversation-summary"><div className="index-item-content conversation-prompt">{prompt?.content ?? "(session start)"}</div><div className="conversation-meta"><span className="index-item-number">#{groupIndex + 1}</span><time>{formatTime(group[0].timestamp)}</time><span>· {group.length} messages</span></div>{response ? <div className="conversation-response"><span>Codex</span>{response.content}</div> : null}</summary>
+                <div className="conversation-messages">{group.map((entry, index) => {
+              const messageClass = entry.kind === "result" ? "tool-reply" : entry.kind === "notice" ? "system" : entry.kind;
+              return <article className={`message ${messageClass}`} key={`${entry.timestamp}-${index}`} onClick={() => setDetail(entry)}>
+                <div className="message-content">
+                  {entry.kind === "user" ? <div className="user-content">{entry.content}</div> : null}
+                  {entry.kind === "assistant" ? <div className="assistant-text">{entry.content}</div> : null}
+                  {entry.kind === "tool" ? <div className="tool-use"><div className="tool-header"><span className="tool-icon">⚙</span>{entry.label}</div><pre>{entry.content}</pre></div> : null}
+                  {entry.kind === "result" ? <div className="tool-result"><pre>{entry.content}</pre></div> : null}
+                  {entry.kind === "notice" ? <div className="thinking"><div className="thinking-label">Session</div>{entry.content}</div> : null}
+                </div>
+                <div className="message-meta"><span className="role-label">{entry.label}</span><time dateTime={entry.timestamp}>{formatTime(entry.timestamp)}</time></div>
+              </article>;
+            })}</div></details>;
+            })}
+          </section>
+          {detail ? <aside className="detail-pane" aria-label="Message detail"><div className="detail-header"><strong>{detail.label}</strong><time>{formatTime(detail.timestamp)}</time><button onClick={() => setDetail(null)} type="button">×</button></div><pre>{detail.content}</pre></aside> : null}
+          {searchOpen ? <dialog className="cmdk" open><div className="cmdk-box"><div className="cmdk-input-row"><input autoFocus onChange={(event) => setSearch(event.target.value)} placeholder="Search commands and transcript…" value={search} /><button onClick={() => setSearchOpen(false)} type="button">Close</button></div><div className="cmdk-list">{matches.map(({ group, index }) => <button key={index} onClick={() => { document.getElementById(`turn-${index}`)?.scrollIntoView(); setSearchOpen(false); }} type="button"><strong>#{index + 1}</strong><span>{group.find((entry) => entry.kind === "user")?.content ?? "Session start"}</span></button>)}</div></div></dialog> : null}
         </div>
       </main>
-    </div>
+    );
+    */
+  }
+
+  return (
+    <main className="agentsession-shell">
+      <section className="agentsession-card" aria-labelledby="page-title">
+        <div className="agentsession-brand"><span>⌁</span> agentsession</div>
+        <h1 id="page-title">Open a Codex session</h1>
+        <p>Choose a local <code>rollout-*.jsonl</code> file to view it with the Codex transcript interface.</p>
+        <div className="picker-steps"><span>1</span><p>Click <strong>Open session</strong>. The Codex folder path is copied for you.</p><span>2</span><p>In the file dialog, press <kbd>⌘⇧G</kbd>, paste, and press Return.</p><span>3</span><p>Choose a <code>rollout-*.jsonl</code> file.</p></div>
+        <div className="path-row"><code>~/.codex/sessions</code><button onClick={() => navigator.clipboard.writeText("~/.codex/sessions").then(() => setPathCopied(true)).catch(() => setPathCopied(false))} type="button">{pathCopied ? "Copied" : "Copy path"}</button></div>
+        <button className="open-session" disabled={isLoading} onClick={openCodexPicker} type="button">{isLoading ? "Reading session…" : "Open session"}</button>
+
+        <input accept=".jsonl,application/json" className="file-input" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadCodexFile(file); }} ref={fallbackInput} type="file" />
+        {error ? <p className="error-message" role="alert">{error}</p> : null}
+        <p className="agentsession-note">Processed locally in your browser. Nothing is uploaded.</p>
+      </section>
+    </main>
   );
 }

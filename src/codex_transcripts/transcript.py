@@ -154,6 +154,75 @@ def _format_duration_ms(ms: int | None) -> str:
     return f"{hours}h {mins_rem:02d}m"
 
 
+def _as_non_negative_int(value: Any) -> int:
+    """Return an integer metric from an untrusted rollout payload."""
+    return value if isinstance(value, int) and value >= 0 else 0
+
+
+def _conversation_filter_data(
+    messages: list[tuple[str, str, str]], *, duration_ms: int | None
+) -> dict[str, Any]:
+    """Extract the per-turn signals used by the browser filter controls.
+
+    Token counts in a rollout are cumulative snapshots. The final
+    ``last_token_usage`` snapshot is therefore used instead of summing totals
+    that overlap with one another.
+    """
+    token_count = 0
+    tool_calls = 0
+    exec_count = 0
+    turn_context = False
+    interrupted = False
+    context_compacted = False
+
+    for log_type, message_json, _timestamp in messages:
+        try:
+            message = json.loads(message_json)
+        except json.JSONDecodeError:
+            continue
+
+        content = message.get("content", []) if isinstance(message, dict) else []
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            block_type = block.get("type")
+            if block_type == "tool_use":
+                name = block.get("name")
+                alias = name.removeprefix("functions.") if isinstance(name, str) else ""
+                if alias == "token_count":
+                    payload = block.get("input")
+                    info = payload.get("info") if isinstance(payload, dict) else None
+                    usage = info.get("last_token_usage") if isinstance(info, dict) else None
+                    if not isinstance(usage, dict) and isinstance(info, dict):
+                        usage = info.get("total_token_usage")
+                    if isinstance(usage, dict):
+                        token_count = _as_non_negative_int(usage.get("total_tokens"))
+                elif alias == "turn_context":
+                    turn_context = True
+                else:
+                    tool_calls += 1
+                    if alias in {"exec_command", "bash", "local_shell_call", "shell"}:
+                        exec_count += 1
+            elif block_type == "text":
+                text = block.get("text")
+                if log_type == "system" and isinstance(text, str):
+                    normalized = text.lower()
+                    interrupted = interrupted or "turn aborted" in normalized
+                    context_compacted = context_compacted or "context compacted" in normalized
+
+    return {
+        "duration_ms": duration_ms,
+        "token_count": token_count,
+        "tool_calls": tool_calls,
+        "exec_count": exec_count,
+        "turn_context": turn_context,
+        "interrupted": interrupted,
+        "context_compacted": context_compacted,
+    }
+
+
 def generate_html_from_session_data(
     session_data: dict[str, Any],
     output_path: str | Path,
@@ -271,9 +340,12 @@ def generate_html_from_session_data(
         if start_dt and end_dt:
             duration_ms = int((end_dt - start_dt).total_seconds() * 1000)
 
+        filters = _conversation_filter_data(msgs, duration_ms=duration_ms)
+
         stats_obj = analyze_conversation(msgs)
         tool_calls = sum(stats_obj.tool_counts.values())
         tool_stats_str = format_tool_stats(stats_obj.tool_counts)
+        filters["commits"] = len(stats_obj.commits)
 
         long_texts_html = ""
         if stats_obj.long_texts:
@@ -326,6 +398,7 @@ def generate_html_from_session_data(
                 "prompt_html": prompt_html,
                 "prompt_plain": prompt_plain,
                 "prompt_raw": prompt_raw,
+                "filters": filters,
             }
         )
 
@@ -354,7 +427,15 @@ def generate_html_from_session_data(
         "kinds": kinds_compact,
         "ids": transcript_item_ids,
         "ts": transcript_item_timestamps,
-        "groups": [{"start": g["start"], "end": g["end"], "prompt": g.get("prompt_raw")} for g in rendered_groups],
+        "groups": [
+            {
+                "start": g["start"],
+                "end": g["end"],
+                "prompt": g.get("prompt_raw"),
+                "filters": g["filters"],
+            }
+            for g in rendered_groups
+        ],
     }
 
     index_template = get_template("index.html")

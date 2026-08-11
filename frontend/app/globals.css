@@ -18,6 +18,8 @@
 html,
 body {
   min-height: 100%;
+  background: #0d0d0f;
+  overscroll-behavior: none;
 }
 
 body {
@@ -323,21 +325,27 @@ code {
 .empty-state { color: var(--muted); }
 .codex-transcript-frame { width: 100%; min-height: 100dvh; border: 0; }
 
-.agentsession-shell { display: grid; min-height: 100dvh; place-items: center; padding: 24px; background: #0d0d0f; color: #e6e6e8; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-.agentsession-card { width: min(100%, 560px); padding: 32px; border: 1px solid #2b2b30; border-radius: 14px; background: #161618; }
-.agentsession-brand { display: flex; gap: 8px; align-items: center; color: #9a9aa2; font-size: .86rem; font-weight: 650; letter-spacing: .04em; }
-.agentsession-brand span { color: #4a90ff; font-size: 1.2rem; }
-.agentsession-card h1 { margin: 24px 0 10px; color: #f1f1f2; font-size: 1.8rem; letter-spacing: -.03em; }
-.agentsession-card > p { color: #9a9aa2; line-height: 1.6; }
-.picker-steps { display: grid; grid-template-columns: 24px 1fr; gap: 10px 12px; margin: 28px 0 20px; color: #c7c7cc; font-size: .9rem; }
-.picker-steps span { display: grid; width: 24px; height: 24px; place-items: center; border: 1px solid #3f3f46; border-radius: 50%; color: #9a9aa2; font-size: .72rem; }
-.picker-steps p { margin: 0; line-height: 1.55; }
-.agentsession-card kbd, .agentsession-card code { padding: 2px 5px; border: 1px solid #34343a; border-radius: 4px; background: #0d0d0f; color: #d9d9df; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .82em; }
-.path-row { display: flex; align-items: center; justify-content: space-between; padding: 9px 10px; border: 1px solid #2d2d33; border-radius: 8px; background: #0d0d0f; }
-.path-row button { border: 0; background: transparent; color: #4a90ff; cursor: pointer; font-size: .82rem; }
-.open-session { width: 100%; min-height: 44px; margin-top: 14px; border: 1px solid #4a90ff; border-radius: 8px; background: #2f6fed; color: white; cursor: pointer; font-weight: 650; }
-.open-session:hover { background: #3b7af0; }
-.agentsession-note { margin-top: 18px; color: #777780; font-size: .78rem; text-align: center; }
+.agentsession-shell { display: grid; min-height: 100dvh; place-items: center; padding: 24px; background: #0d0d0f; color: #e6e6e8; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
+.agentsession-card { width: min(100%, 460px); padding: 28px; border: 1px solid #232327; border-radius: 16px; background: #161618; }
+.agentsession-brand { display: flex; gap: 9px; align-items: center; color: #c7c7cc; font-size: .92rem; font-weight: 600; letter-spacing: -.01em; }
+.agentsession-logo { width: 22px; height: 22px; flex: none; }
+.provider-toggle { display: inline-flex; gap: 3px; margin: 22px 0 24px; padding: 3px; border: 1px solid #232327; border-radius: 10px; background: #0f0f11; }
+.provider-toggle button { border: 0; padding: 6px 16px; border-radius: 7px; background: transparent; color: #9a9aa2; cursor: pointer; font: inherit; font-size: .85rem; font-weight: 550; transition: background .15s, color .15s; }
+.provider-toggle button:hover { color: #e6e6e8; }
+.provider-toggle button.active { background: #26262b; color: #f1f1f2; }
+.agentsession-card h1 { margin: 0 0 8px; color: #f1f1f2; font-size: 1.5rem; letter-spacing: -.02em; }
+.agentsession-sub { margin: 0 0 22px; color: #9a9aa2; line-height: 1.55; font-size: .92rem; }
+.agentsession-card kbd, .agentsession-card code { padding: 2px 6px; border: 1px solid #2d2d33; border-radius: 5px; background: #0d0d0f; color: #d9d9df; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .82em; }
+.path-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 10px 9px 12px; border: 1px solid #232327; border-radius: 9px; background: #0d0d0f; }
+.path-row code { border: 0; background: none; padding: 0; color: #e6e6e8; min-width: 0; overflow-wrap: anywhere; }
+.path-row button { border: 0; background: transparent; color: #4a90ff; cursor: pointer; font: inherit; font-size: .82rem; flex-shrink: 0; }
+.path-row button:hover { color: #6aa6ff; }
+.agentsession-hint { margin: 10px 2px 0; color: #8a8a92; font-size: .8rem; line-height: 1.5; }
+.open-session { width: 100%; min-height: 46px; margin-top: 20px; border: 0; border-radius: 10px; background: #2f6fed; color: #fff; cursor: pointer; font: inherit; font-weight: 600; font-size: .95rem; transition: background .15s; }
+.open-session:hover:not(:disabled) { background: #2a62df; }
+.open-session:disabled { opacity: .6; cursor: default; }
+.agentsession-soon { margin: 14px 0 0; color: #8a8a92; font-size: .8rem; text-align: center; }
+.error-message { margin: 14px 0 0; color: #f0a3a3; font-size: .85rem; text-align: center; }
 
 /* Codex viewer: mirrors the existing codex-transcripts HTML renderer. */
 .codex-viewer {

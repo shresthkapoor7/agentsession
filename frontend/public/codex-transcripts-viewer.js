@@ -360,6 +360,7 @@
   // Side navigator: one tick per conversation. The active/hovered tick grows.
   // ---------------------------------------------------------------------------
   var sideTicks = [];
+  var tickByGroup = {};
   var currentGroup = -1;
 
   function setActiveGroup(gidx) {
@@ -382,6 +383,7 @@
     var convs = document.querySelectorAll('.conversation');
     if (convs.length < 2) { nav.style.display = 'none'; return; }
     sideTicks = [];
+    tickByGroup = {};
     convs.forEach(function(d) {
       var gi = d.getAttribute('data-group-index');
       var summary = d.querySelector('.conversation-summary');
@@ -399,36 +401,46 @@
       btn.addEventListener('click', function() {
         var g = parseInt(gi, 10);
         var card = getConversationEl(g);
-        if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        setActiveGroup(g);
+        if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
       });
       nav.appendChild(btn);
       sideTicks.push(btn);
+      tickByGroup[gi] = btn;
     });
 
     setupSideNavScrollSpy();
   }
 
   function setupSideNavScrollSpy() {
-    var convs = Array.prototype.slice.call(document.querySelectorAll('.conversation'));
-    if (!convs.length) return;
+    if (!document.querySelectorAll('.conversation').length) return;
     var ticking = false;
 
+    // Highlight every conversation whose card overlaps a band near the top of the
+    // viewport. Usually that's one turn; while scrolling across a boundary two turns
+    // straddle the band and both light up (T3-style). Every turn passes through it,
+    // so the rail reaches all of them. Cards are re-queried each frame so this stays
+    // correct after the list is re-sorted.
     function update() {
       ticking = false;
-      var anchor = 140; // reference line measured from the top of the viewport
-      var best = 0;
+      var vh = window.innerHeight || document.documentElement.clientHeight;
+      var bandTop = vh * 0.22;
+      var bandBottom = vh * 0.55;
+      var convs = document.querySelectorAll('#conversations .conversation');
+      var anyActive = false;
+      var lastTick = null;
       for (var i = 0; i < convs.length; i++) {
-        if (convs[i].getBoundingClientRect().top <= anchor) best = i;
-        else break;
+        var tick = tickByGroup[convs[i].getAttribute('data-group-index')];
+        if (!tick) continue;
+        var rect = convs[i].getBoundingClientRect();
+        var inBand = rect.bottom > bandTop && rect.top < bandBottom;
+        tick.classList.toggle('active', inBand);
+        if (inBand) anyActive = true;
+        if (rect.bottom > 0 && rect.top < vh) lastTick = tick;
       }
-      // At (or near) the bottom of the page, activate the last conversation so
-      // the rail always reaches the end instead of stalling mid-list.
-      var doc = document.documentElement;
-      if (window.innerHeight + window.scrollY >= doc.scrollHeight - 2) {
-        best = convs.length - 1;
-      }
-      setActiveGroup(parseInt(convs[best].getAttribute('data-group-index'), 10));
+      var atBottom = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2;
+      // Fallbacks: at the very bottom (or if nothing hit the band) keep the last
+      // visible turn lit so the rail never goes fully dark.
+      if ((atBottom || !anyActive) && lastTick) lastTick.classList.add('active');
     }
 
     function onScroll() {
@@ -439,7 +451,66 @@
 
     window.addEventListener('scroll', onScroll, { passive: true });
     window.addEventListener('resize', onScroll, { passive: true });
+    CT.refreshSideNav = onScroll;
     update();
+  }
+
+  // ---------------------------------------------------------------------------
+  // Conversation filters: all checks are against compact per-group metadata, so
+  // filtering never forces transcript chunks to load.
+  // ---------------------------------------------------------------------------
+  // ---------------------------------------------------------------------------
+  // Sort conversations by a numeric field, ascending or descending. Reorders the
+  // cards (and the matching side-nav ticks) in place — nothing is hidden.
+  // ---------------------------------------------------------------------------
+  function setupSort() {
+    var container = document.getElementById('conversations');
+    var buttons = Array.prototype.slice.call(document.querySelectorAll('.sort-btn'));
+    if (!container || !buttons.length) return;
+    var state = { field: 'index', dir: 'asc' };
+
+    function metric(gi, field) {
+      if (field === 'index') return gi;
+      var f = (meta.groups[gi] && meta.groups[gi].filters) || {};
+      if (field === 'tokens') return f.token_count || 0;
+      if (field === 'duration') return f.duration_ms || 0;
+      if (field === 'tools') return f.tool_calls || 0;
+      return gi;
+    }
+
+    function apply() {
+      var cards = Array.prototype.slice.call(container.querySelectorAll('.conversation'));
+      cards.sort(function(a, b) {
+        var ga = parseInt(a.getAttribute('data-group-index'), 10);
+        var gb = parseInt(b.getAttribute('data-group-index'), 10);
+        var d = metric(ga, state.field) - metric(gb, state.field);
+        if (d !== 0) return state.dir === 'asc' ? d : -d;
+        return ga - gb; // stable original order, regardless of direction
+      });
+      var nav = document.getElementById('side-nav');
+      cards.forEach(function(card) {
+        container.appendChild(card);
+        var tick = tickByGroup[card.getAttribute('data-group-index')];
+        if (nav && tick) nav.appendChild(tick);
+      });
+      buttons.forEach(function(btn) {
+        var on = btn.getAttribute('data-field') === state.field;
+        btn.classList.toggle('active', on);
+        var caret = btn.querySelector('.sort-caret');
+        if (caret) caret.textContent = on ? (state.dir === 'asc' ? '↑' : '↓') : '';
+      });
+      if (typeof CT.refreshSideNav === 'function') CT.refreshSideNav();
+    }
+
+    buttons.forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        var field = btn.getAttribute('data-field');
+        if (state.field === field) state.dir = state.dir === 'asc' ? 'desc' : 'asc';
+        else { state.field = field; state.dir = field === 'index' ? 'asc' : 'desc'; }
+        apply();
+      });
+    });
+    apply();
   }
 
   // ---------------------------------------------------------------------------
@@ -747,6 +818,7 @@
     enhance(document);
 
     buildSideNav();
+    setupSort();
     setupDetailPane();
     setupCommandPalette();
     setupKeyboard();
@@ -758,4 +830,3 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
 })();
-

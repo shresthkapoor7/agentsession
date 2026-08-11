@@ -1,7 +1,7 @@
 import { ImageResponse } from "next/og";
 
 // PNG app icon (apple-touch-icon) for link-preview crawlers that ignore the SVG
-// favicon. Matches app/icon.svg — a session "pulse" on a dark tile.
+// favicon. Matches app/icon.svg — a terminal prompt on a dark tile.
 export const size = { width: 180, height: 180 };
 export const contentType = "image/png";
 
@@ -20,14 +20,14 @@ export default function AppleIcon() {
       >
         <svg width="132" height="132" viewBox="0 0 32 32">
           <polyline
-            points="5,17 11,17 14,10 18,24 21,17 27,17"
+            points="9,11 15,16 9,21"
             fill="none"
             stroke="#ffffff"
-            strokeWidth={2.2}
+            strokeWidth={2.6}
             strokeLinecap="round"
             strokeLinejoin="round"
           />
-          <circle cx="27" cy="17" r="1.9" fill="#4a90ff" />
+          <line x1="17" y1="21.5" x2="24" y2="21.5" stroke="#4a90ff" strokeWidth={2.6} strokeLinecap="round" />
         </svg>
       </div>
     ),

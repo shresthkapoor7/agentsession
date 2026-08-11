@@ -400,7 +400,6 @@
         var g = parseInt(gi, 10);
         var card = getConversationEl(g);
         if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
-        setActiveGroup(g);
       });
       nav.appendChild(btn);
       sideTicks.push(btn);
@@ -414,21 +413,30 @@
     if (!convs.length) return;
     var ticking = false;
 
+    // Highlight every conversation whose card overlaps a band near the top of the
+    // viewport. Usually that's one turn; while scrolling across a boundary two turns
+    // straddle the band and both light up (T3-style). Every turn passes through it,
+    // so the rail reaches all of them.
     function update() {
       ticking = false;
-      var anchor = 140; // reference line measured from the top of the viewport
-      var best = 0;
+      var vh = window.innerHeight || document.documentElement.clientHeight;
+      var bandTop = vh * 0.22;
+      var bandBottom = vh * 0.55;
+      var anyActive = false;
+      var lastInView = -1;
       for (var i = 0; i < convs.length; i++) {
-        if (convs[i].getBoundingClientRect().top <= anchor) best = i;
-        else break;
+        var rect = convs[i].getBoundingClientRect();
+        var inBand = rect.bottom > bandTop && rect.top < bandBottom;
+        if (sideTicks[i]) sideTicks[i].classList.toggle('active', inBand);
+        if (inBand) anyActive = true;
+        if (rect.bottom > 0 && rect.top < vh) lastInView = i;
       }
-      // At (or near) the bottom of the page, activate the last conversation so
-      // the rail always reaches the end instead of stalling mid-list.
-      var doc = document.documentElement;
-      if (window.innerHeight + window.scrollY >= doc.scrollHeight - 2) {
-        best = convs.length - 1;
+      var atBottom = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2;
+      // Fallbacks: at the very bottom (or if nothing hit the band) keep the last
+      // visible turn lit so the rail never goes fully dark.
+      if ((atBottom || !anyActive) && lastInView >= 0 && sideTicks[lastInView]) {
+        sideTicks[lastInView].classList.add('active');
       }
-      setActiveGroup(parseInt(convs[best].getAttribute('data-group-index'), 10));
     }
 
     function onScroll() {

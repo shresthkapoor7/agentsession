@@ -303,7 +303,7 @@ details.continuation { margin-bottom: 16px; }
 details.continuation summary { cursor: pointer; padding: 12px 16px; background: var(--user-bg); border-left: 4px solid var(--user-border); border-radius: 12px; font-weight: 500; color: var(--text-muted); }
 details.continuation summary:hover { background: rgba(25, 118, 210, 0.15); }
 details.continuation[open] summary { border-radius: 12px 12px 0 0; margin-bottom: 0; }
-.index-item { margin-bottom: 10px; border-radius: 14px; overflow: hidden; background: var(--card-bg); border: 1px solid var(--border-subtle); }
+.index-item { margin-bottom: 26px; border-radius: 14px; overflow: hidden; background: var(--card-bg); border: 1px solid var(--border-subtle); }
 .index-item a { display: block; text-decoration: none; color: inherit; }
 .index-item a:hover { background: var(--hover-bg); }
 .index-item-header { display: flex; justify-content: space-between; align-items: center; padding: 8px 16px; font-size: 0.75rem; }

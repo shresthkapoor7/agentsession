@@ -337,12 +337,12 @@ code {
 .agentsession-sub { margin: 0 0 22px; color: #9a9aa2; line-height: 1.55; font-size: .92rem; }
 .agentsession-card kbd, .agentsession-card code { padding: 2px 6px; border: 1px solid #2d2d33; border-radius: 5px; background: #0d0d0f; color: #d9d9df; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .82em; }
 .path-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 10px 9px 12px; border: 1px solid #232327; border-radius: 9px; background: #0d0d0f; }
-.path-row code { border: 0; background: none; padding: 0; color: #e6e6e8; }
-.path-row button { border: 0; background: transparent; color: #4a90ff; cursor: pointer; font: inherit; font-size: .82rem; }
+.path-row code { border: 0; background: none; padding: 0; color: #e6e6e8; min-width: 0; overflow-wrap: anywhere; }
+.path-row button { border: 0; background: transparent; color: #4a90ff; cursor: pointer; font: inherit; font-size: .82rem; flex-shrink: 0; }
 .path-row button:hover { color: #6aa6ff; }
-.agentsession-hint { margin: 10px 2px 0; color: #777780; font-size: .8rem; line-height: 1.5; }
+.agentsession-hint { margin: 10px 2px 0; color: #8a8a92; font-size: .8rem; line-height: 1.5; }
 .open-session { width: 100%; min-height: 46px; margin-top: 20px; border: 0; border-radius: 10px; background: #2f6fed; color: #fff; cursor: pointer; font: inherit; font-weight: 600; font-size: .95rem; transition: background .15s; }
-.open-session:hover:not(:disabled) { background: #3b7af0; }
+.open-session:hover:not(:disabled) { background: #2a62df; }
 .open-session:disabled { opacity: .6; cursor: default; }
 .agentsession-soon { margin: 14px 0 0; color: #8a8a92; font-size: .8rem; text-align: center; }
 .error-message { margin: 14px 0 0; color: #f0a3a3; font-size: .85rem; text-align: center; }

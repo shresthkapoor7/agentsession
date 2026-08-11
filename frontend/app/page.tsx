@@ -414,13 +414,12 @@ export default function Home() {
           <span>agentsession</span>
         </header>
 
-        <div className="provider-toggle" role="tablist" aria-label="Session type">
+        <div className="provider-toggle" role="group" aria-label="Session type">
           {(Object.keys(PROVIDERS) as ProviderKey[]).map((key) => (
             <button
               key={key}
               type="button"
-              role="tab"
-              aria-selected={provider === key}
+              aria-pressed={provider === key}
               className={provider === key ? "active" : ""}
               onClick={() => { setProvider(key); setPathCopied(false); setError(null); }}
             >

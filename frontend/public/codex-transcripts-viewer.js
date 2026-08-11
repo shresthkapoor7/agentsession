@@ -401,7 +401,7 @@
       btn.addEventListener('click', function() {
         var g = parseInt(gi, 10);
         var card = getConversationEl(g);
-        if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
       });
       nav.appendChild(btn);
       sideTicks.push(btn);

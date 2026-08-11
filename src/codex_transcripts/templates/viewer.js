@@ -398,6 +398,7 @@
 
     function matchesDuration(ms, value) {
       if (value === 'all') return true;
+      if (typeof ms !== 'number' || !isFinite(ms)) return false;
       if (value === 'under-1m') return ms < 60000;
       if (value === '1-5m') return ms >= 60000 && ms < 300000;
       return ms >= 300000;
@@ -422,7 +423,7 @@
         var filters = group.filters || {};
         var match = matchesTime(group, time.value) &&
           (tokens.value === 'all' || (filters.token_count || 0) >= parseInt(tokens.value, 10)) &&
-          matchesDuration(filters.duration_ms || 0, duration.value) &&
+          matchesDuration(filters.duration_ms, duration.value) &&
           (tools.value === 'all' || (filters.tool_calls || 0) >= parseInt(tools.value, 10)) &&
           matchesActivity(filters, activity.value);
         var card = getConversationEl(index);

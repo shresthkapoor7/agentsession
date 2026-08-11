@@ -213,7 +213,7 @@ def _conversation_filter_data(
                     context_compacted = context_compacted or "context compacted" in normalized
 
     return {
-        "duration_ms": duration_ms or 0,
+        "duration_ms": duration_ms,
         "token_count": token_count,
         "tool_calls": tool_calls,
         "exec_count": exec_count,

@@ -354,7 +354,7 @@ a.control-btn { text-decoration: none; }
 /* Sort conversations (ascending / descending by a numeric field) */
 .conversation-sort { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0; }
 .conversation-sort-heading { font-size: 0.68rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
-.sort-controls { box-sizing: border-box; display: inline-flex; align-items: center; height: 32px; gap: 3px; padding: 3px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--surface-bg); }
+.sort-controls { box-sizing: border-box; display: inline-flex; align-items: center; min-height: 32px; gap: 3px; padding: 3px; border: 1px solid var(--border-subtle); border-radius: 8px; background: var(--surface-bg); }
 .sort-btn { display: inline-flex; align-items: center; gap: 5px; border: 0; padding: 0 11px; height: 24px; border-radius: 6px; background: transparent; color: var(--text-muted); cursor: pointer; font: inherit; font-size: 0.8rem; transition: background 0.14s ease, color 0.14s ease; }
 .sort-btn:hover { color: var(--text-color); }
 .sort-btn.active { background: var(--hover-bg); color: var(--text-color); }
@@ -451,4 +451,3 @@ body.detail-open .detail-pane { transform: translateX(0); }
 .cmdk-footer { display: flex; gap: 16px; padding: 10px 14px; border-top: 1px solid var(--border-subtle); color: var(--text-muted); font-size: 0.72rem; }
 .cmdk-footer kbd { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 1px 5px; border-radius: 5px; border: 1px solid var(--border); background: var(--surface-bg); margin-right: 3px; }
 """
-

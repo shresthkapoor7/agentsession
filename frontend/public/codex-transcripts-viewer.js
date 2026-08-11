@@ -451,6 +451,7 @@
 
     window.addEventListener('scroll', onScroll, { passive: true });
     window.addEventListener('resize', onScroll, { passive: true });
+    CT.refreshSideNav = onScroll;
     update();
   }
 
@@ -483,8 +484,8 @@
         var ga = parseInt(a.getAttribute('data-group-index'), 10);
         var gb = parseInt(b.getAttribute('data-group-index'), 10);
         var d = metric(ga, state.field) - metric(gb, state.field);
-        if (d === 0) d = ga - gb; // stable tiebreak by original order
-        return state.dir === 'asc' ? d : -d;
+        if (d !== 0) return state.dir === 'asc' ? d : -d;
+        return ga - gb; // stable original order, regardless of direction
       });
       var nav = document.getElementById('side-nav');
       cards.forEach(function(card) {
@@ -498,6 +499,7 @@
         var caret = btn.querySelector('.sort-caret');
         if (caret) caret.textContent = on ? (state.dir === 'asc' ? '↑' : '↓') : '';
       });
+      if (typeof CT.refreshSideNav === 'function') CT.refreshSideNav();
     }
 
     buttons.forEach(function(btn) {

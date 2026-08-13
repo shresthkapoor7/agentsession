@@ -22,6 +22,11 @@ type TokenUsage = {
 
 type UsageEvent = TokenUsage & { ts: string };
 
+type UsageSnapshot = {
+  cumulative: boolean;
+  usage: TokenUsage;
+};
+
 type SessionTurn = {
   completedAt: string | null;
   durationMs: number | null;
@@ -91,21 +96,39 @@ function numberValue(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
 }
 
-function usageFromPayload(payload: Record<string, unknown>): TokenUsage | null {
+function usageFromPayload(payload: Record<string, unknown>): UsageSnapshot | null {
   const info = payload.info;
   if (!info || typeof info !== "object") return null;
-  const usage = (info as Record<string, unknown>).last_token_usage ?? (info as Record<string, unknown>).total_token_usage;
+  const infoValues = info as Record<string, unknown>;
+  const cumulative = infoValues.total_token_usage;
+  const usage = cumulative ?? infoValues.last_token_usage;
   if (!usage || typeof usage !== "object") return null;
   const values = usage as Record<string, unknown>;
   const input = numberValue(values.input_tokens);
   const output = numberValue(values.output_tokens);
   return {
-    input,
-    cachedInput: numberValue(values.cached_input_tokens),
-    cacheWrite: numberValue(values.cache_write_input_tokens),
-    output,
-    reasoning: numberValue(values.reasoning_output_tokens),
-    total: numberValue(values.total_tokens) || input + output,
+    cumulative: Boolean(cumulative && typeof cumulative === "object"),
+    usage: {
+      input,
+      cachedInput: numberValue(values.cached_input_tokens),
+      cacheWrite: numberValue(values.cache_write_input_tokens),
+      output,
+      reasoning: numberValue(values.reasoning_output_tokens),
+      total: numberValue(values.total_tokens) || input + output,
+    },
+  };
+}
+
+function usageDelta(current: TokenUsage, previous: TokenUsage | null): TokenUsage {
+  if (!previous || current.total < previous.total) return current;
+  const delta = (key: keyof TokenUsage) => Math.max(0, current[key] - previous[key]);
+  return {
+    input: delta("input"),
+    cachedInput: delta("cachedInput"),
+    cacheWrite: delta("cacheWrite"),
+    output: delta("output"),
+    reasoning: delta("reasoning"),
+    total: delta("total"),
   };
 }
 
@@ -118,6 +141,7 @@ function parseCodexRollout(raw: string, filename: string): Transcript {
   const systemEvent: Record<string, number> = {};
   const systemResponse: Record<string, number> = {};
   const usageEvents: UsageEvent[] = [];
+  let previousUsage: TokenUsage | null = null;
   const turns = new Map<string, SessionTurn>();
   const turnContexts: TurnContext[] = [];
   let patchApplyCount = 0;
@@ -172,8 +196,11 @@ function parseCodexRollout(raw: string, filename: string): Transcript {
         const turn = turns.get(stringValue(data.turn_id));
         if (turn) turn.status = "interrupted";
       } else if (eventType === "token_count") {
-        const usage = usageFromPayload(data);
-        if (usage) usageEvents.push({ ts: timestamp, ...usage });
+        const snapshot = usageFromPayload(data);
+        if (snapshot) {
+          usageEvents.push({ ts: timestamp, ...(snapshot.cumulative ? usageDelta(snapshot.usage, previousUsage) : snapshot.usage) });
+          previousUsage = snapshot.cumulative ? snapshot.usage : null;
+        }
       } else if (eventType === "task_started") {
         const turnId = stringValue(data.turn_id) || `unknown-${timestamp}`;
         turns.set(turnId, { id: turnId, startedAt: timestamp, completedAt: null, durationMs: null, status: "running" });
@@ -426,7 +453,7 @@ function viewerDocument(transcript: Transcript) {
   const settingsHtml = [...settings.entries()].map(([setting, count]) => `<li><code>${escapeHtml(setting)}</code><span>${count} turn${count === 1 ? "" : "s"}</span></li>`).join("") || "<li>Unavailable</li>";
   const topTools = [...toolCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, count]) => `${count} ${escapeHtml(name)}`).join(" · ") || "No tool calls";
   const modelName = transcript.turnContexts.find((context) => context.model)?.model ?? "Model unavailable";
-  const dashboardHtml = `<section class="usage-dashboard" aria-labelledby="usage-heading"><div class="usage-header"><div><p class="usage-eyebrow">Local session telemetry</p><h2 id="usage-heading">Session usage</h2><p>${escapeHtml(modelName)} · ${transcript.usageEvents.length} model requests · request totals are summed.</p></div><span class="usage-status">${completedTurns.length} completed${interruptedTurns.length ? ` · ${interruptedTurns.length} interrupted` : ""}</span></div><div class="usage-metrics">${metric("Processed tokens", tokenLabel(usage.total), `${tokenLabel(usage.input)} input across requests`)}${metric("Cached input", tokenLabel(usage.cachedInput), `${usage.input ? ((usage.cachedInput / usage.input) * 100).toFixed(1) : "0.0"}% of observed input`)}${metric("Generated", tokenLabel(usage.output), `Includes ${tokenLabel(usage.reasoning)} reasoning`)}${metric("Active task time", durationLabel(activeMs), `${durationLabel(elapsedMs)} elapsed session time`)}</div><div class="usage-detail-grid"><figure class="usage-chart"><figcaption><div><p class="usage-eyebrow">Completed tasks</p><h3>Processed-token activity</h3></div><span>Peak request: ${tokenLabel(Math.max(...transcript.usageEvents.map((event) => event.total), 0))}</span></figcaption><div class="usage-bars" role="img" aria-label="Processed token totals by completed task">${bars}</div><p>Each bar sums request totals recorded within that task. This includes input context and generated output.</p></figure><section class="usage-activity" aria-label="Session activity"><div><p class="usage-eyebrow">Activity</p><h3>${[...toolCounts.values()].reduce((sum, count) => sum + count, 0)} tool calls · ${transcript.patchApplyCount} patches</h3><p>${topTools}</p></div><div><p class="usage-eyebrow">Model settings</p><ul>${settingsHtml}</ul></div></section></div><details class="usage-details"><summary>Session details</summary><dl><div><dt>Working directory</dt><dd>${escapeHtml(transcript.cwd ?? "Unavailable")}</dd></div><div><dt>Source</dt><dd>${escapeHtml([transcript.session.originator, transcript.session.source].filter(Boolean).join(" · ") || "Unavailable")}</dd></div><div><dt>CLI version</dt><dd>${escapeHtml(transcript.session.cliVersion ?? "Unavailable")}</dd></div><div><dt>Git revision</dt><dd>${escapeHtml([transcript.session.gitBranch, transcript.session.gitCommit?.slice(0, 12)].filter(Boolean).join(" · ") || "Unavailable")}</dd></div></dl></details></section>`;
+  const dashboardHtml = `<section class="usage-dashboard" aria-labelledby="usage-heading"><div class="usage-header"><div><p class="usage-eyebrow">Local session telemetry</p><h2 id="usage-heading">Session usage</h2><p>${escapeHtml(modelName)} · ${transcript.usageEvents.length} usage updates · cumulative deltas are summed.</p></div><span class="usage-status">${completedTurns.length} completed${interruptedTurns.length ? ` · ${interruptedTurns.length} interrupted` : ""}</span></div><div class="usage-metrics">${metric("Processed tokens", tokenLabel(usage.total), `${tokenLabel(usage.input)} input across updates`)}${metric("Cached input", tokenLabel(usage.cachedInput), `${usage.input ? ((usage.cachedInput / usage.input) * 100).toFixed(1) : "0.0"}% of observed input`)}${metric("Generated", tokenLabel(usage.output), `Includes ${tokenLabel(usage.reasoning)} reasoning`)}${metric("Active task time", durationLabel(activeMs), `${durationLabel(elapsedMs)} elapsed session time`)}</div><div class="usage-detail-grid"><figure class="usage-chart"><figcaption><div><p class="usage-eyebrow">Completed tasks</p><h3>Processed-token activity</h3></div><span>Peak update: ${tokenLabel(Math.max(...transcript.usageEvents.map((event) => event.total), 0))}</span></figcaption><div class="usage-bars" role="img" aria-label="Processed token totals by completed task">${bars}</div><p>Each bar sums cumulative-usage deltas recorded within that task. This includes input context and generated output.</p></figure><section class="usage-activity" aria-label="Session activity"><div><p class="usage-eyebrow">Activity</p><h3>${[...toolCounts.values()].reduce((sum, count) => sum + count, 0)} tool calls · ${transcript.patchApplyCount} patches</h3><p>${topTools}</p></div><div><p class="usage-eyebrow">Model settings</p><ul>${settingsHtml}</ul></div></section></div><details class="usage-details"><summary>Session details</summary><dl><div><dt>Working directory</dt><dd>${escapeHtml(transcript.cwd ?? "Unavailable")}</dd></div><div><dt>Source</dt><dd>${escapeHtml([transcript.session.originator, transcript.session.source].filter(Boolean).join(" · ") || "Unavailable")}</dd></div><div><dt>CLI version</dt><dd>${escapeHtml(transcript.session.cliVersion ?? "Unavailable")}</dd></div><div><dt>Git revision</dt><dd>${escapeHtml([transcript.session.gitBranch, transcript.session.gitCommit?.slice(0, 12)].filter(Boolean).join(" · ") || "Unavailable")}</dd></div></dl></details></section>`;
   const summaryHtml =
     dashboardHtml + `<div class="viewer-summary">` +
     stat(`<b>${groups.length}</b> conversations`) +

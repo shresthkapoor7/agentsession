@@ -494,4 +494,3 @@ body.detail-open .detail-pane { transform: translateX(0); }
 .cmdk-shortcut span { color: var(--text-muted); font-size: 0.88rem; }
 .cmdk-footer { display: flex; gap: 16px; padding: 10px 14px; border-top: 1px solid var(--border-subtle); color: var(--text-muted); font-size: 0.72rem; }
 .cmdk-footer kbd { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; padding: 1px 5px; border-radius: 5px; border: 1px solid var(--border); background: var(--surface-bg); margin-right: 3px; }
-"""

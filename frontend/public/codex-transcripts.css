@@ -402,8 +402,7 @@ a.control-btn { text-decoration: none; }
 .sort-caret { min-width: 8px; text-align: center; color: var(--accent); font-size: 0.78rem; }
 @media (max-width: 720px) { .sort-controls { flex-wrap: wrap; } }
 .message.active { box-shadow: 0 0 0 2px color-mix(in srgb, var(--user-border) 65%, transparent), 0 1px 3px var(--shadow-color); }
-.conversations { margin-top: 12px; transition: filter 0.2s ease; }
-body.detail-open .conversations { filter: brightness(0.82); }
+.conversations { margin-top: 12px; }
 .conversation-summary { cursor: pointer; padding: 12px 14px; list-style: none; -webkit-user-select: none; user-select: none; }
 .conversation-summary::-webkit-details-marker { display: none; }
 .conversation-summary::marker { content: ""; }

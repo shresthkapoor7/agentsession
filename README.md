@@ -1,4 +1,4 @@
-# agentsession
+<h1><img src="frontend/app/icon.svg" width="32" height="32" alt="agentsession logo" /> agentsession</h1>
 
 A browser viewer for Codex session rollout files.
 

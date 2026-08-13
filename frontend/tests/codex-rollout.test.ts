@@ -21,6 +21,7 @@ test("parses transcript entries, tools, and session metadata", () => {
   ), "rollout.jsonl");
 
   assert.equal(transcript.id, "session-1");
+  assert.equal(transcript.provider, "codex");
   assert.equal(transcript.cwd, "/repo");
   assert.equal(transcript.session.gitBranch, "main");
   assert.deepEqual(transcript.entries.map((entry) => entry.kind), ["user", "tool", "result", "assistant"]);

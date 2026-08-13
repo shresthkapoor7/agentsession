@@ -3,7 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": ">=22.6.0"
+  },
   "scripts": {
+    "pretest": "node scripts/require-node.mjs",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",

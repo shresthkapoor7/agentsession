@@ -56,6 +56,11 @@ export type Transcript = {
   usageEvents: UsageEvent[];
 };
 
+export type TranscriptExport = {
+  content: string;
+  filename: string;
+};
+
 const HANDLED_ROLLOUT = new Set(["session_meta", "event_msg", "response_item", "compacted", "turn_context"]);
 const HANDLED_EVENT = new Set(["user_message", "agent_message", "context_compacted", "turn_aborted", "agent_reasoning", "agent_reasoning_raw_content", "token_count"]);
 const HANDLED_ITEM = new Set(["function_call", "custom_tool_call", "local_shell_call", "web_search_call", "function_call_output", "custom_tool_call_output", "local_shell_call_output", "message", "reasoning"]);
@@ -122,6 +127,7 @@ export function parseCodexRollout(raw: string, filename: string): Transcript {
   const systemEvent: Record<string, number> = {};
   const systemResponse: Record<string, number> = {};
   const usageEvents: UsageEvent[] = [];
+  const abortedTurnIds = new Set<string>();
   let previousUsage: TokenUsage | null = null;
   const turns = new Map<string, SessionTurn>();
   const turnContexts: TurnContext[] = [];
@@ -169,8 +175,8 @@ export function parseCodexRollout(raw: string, filename: string): Transcript {
       } else if (eventType === "turn_aborted") {
         const reason = stringValue(data.reason);
         entries.push({ content: reason ? `Turn aborted: ${reason}` : "Turn aborted", kind: "notice", label: "Session", timestamp });
-        const turn = turns.get(stringValue(data.turn_id));
-        if (turn) turn.status = "interrupted";
+        const turnId = stringValue(data.turn_id);
+        if (turnId) abortedTurnIds.add(turnId);
       } else if (eventType === "token_count") {
         const snapshot = usageFromPayload(data);
         if (snapshot) {
@@ -212,7 +218,7 @@ export function parseCodexRollout(raw: string, filename: string): Transcript {
     }
 
     const itemType = stringValue(data.type);
-    if (["function_call", "custom_tool_call", "local_shell_call"].includes(itemType)) {
+    if (["function_call", "custom_tool_call", "local_shell_call", "web_search_call"].includes(itemType)) {
       const name = stringValue(data.name) || itemType;
       const input = data.arguments ?? data.input ?? data;
       entries.push({ content: prettyValue(input), kind: "tool", label: name, timestamp });
@@ -229,9 +235,7 @@ export function parseCodexRollout(raw: string, filename: string): Transcript {
   }
 
   for (const turn of turns.values()) {
-    if (turn.status !== "running") continue;
-    const aborted = entries.some((entry) => entry.kind === "notice" && entry.timestamp >= turn.startedAt && entry.content.toLowerCase().includes("turn aborted"));
-    if (aborted) turn.status = "interrupted";
+    if (turn.status === "running" && abortedTurnIds.has(turn.id)) turn.status = "interrupted";
   }
 
   return {
@@ -239,5 +243,13 @@ export function parseCodexRollout(raw: string, filename: string): Transcript {
     turns: [...turns.values()].sort((a, b) => a.startedAt.localeCompare(b.startedAt)),
     turnContexts: turnContexts.sort((a, b) => a.ts.localeCompare(b.ts)),
     usageEvents: usageEvents.sort((a, b) => a.ts.localeCompare(b.ts)),
+  };
+}
+
+export function createTranscriptExport(transcript: Transcript): TranscriptExport {
+  const basename = transcript.filename.replace(/\.jsonl$/i, "") || "transcript";
+  return {
+    filename: `${basename}.agentsession.json`,
+    content: JSON.stringify({ format: "agentsession.transcript.v1", transcript }, null, 2),
   };
 }

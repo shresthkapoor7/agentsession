@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parseCodexRollout } from "../lib/codex-rollout.ts";
+import { createTranscriptExport, parseCodexRollout } from "../lib/codex-rollout.ts";
 
 function rollout(...records: object[]) {
   return records.map((record) => JSON.stringify(record)).join("\n");
@@ -65,4 +65,38 @@ test("keeps unknown Codex record types visible as system counts", () => {
   assert.deepEqual(transcript.systemEvent, { new_event: 1 });
   assert.deepEqual(transcript.systemResponse, { new_item: 1 });
   assert.deepEqual(transcript.systemRollout, { new_record: 1 });
+});
+
+test("marks only the turn named by an abort event as interrupted", () => {
+  const transcript = parseCodexRollout(rollout(
+    { timestamp: "2026-08-01T00:00:00Z", type: "session_meta", payload: { id: "session-1" } },
+    event("2026-08-01T00:00:01Z", { type: "task_started", turn_id: "turn-a" }),
+    event("2026-08-01T00:00:02Z", { type: "task_started", turn_id: "turn-b" }),
+    event("2026-08-01T00:00:03Z", { type: "turn_aborted", turn_id: "turn-a", reason: "interrupted" }),
+  ), "rollout.jsonl");
+
+  assert.deepEqual(transcript.turns.map((turn) => [turn.id, turn.status]), [["turn-a", "interrupted"], ["turn-b", "running"]]);
+});
+
+test("preserves web search calls as tool entries", () => {
+  const transcript = parseCodexRollout(rollout(
+    { timestamp: "2026-08-01T00:00:00Z", type: "session_meta", payload: { id: "session-1" } },
+    { timestamp: "2026-08-01T00:00:01Z", type: "response_item", payload: { type: "web_search_call", action: { type: "search", query: "Codex docs" } } },
+  ), "rollout.jsonl");
+
+  assert.deepEqual(transcript.entries.map((entry) => [entry.kind, entry.label]), [["tool", "web_search_call"]]);
+  assert.deepEqual(transcript.systemResponse, {});
+});
+
+test("exports a versioned normalized transcript with format-change counts", () => {
+  const transcript = parseCodexRollout(rollout(
+    { timestamp: "2026-08-01T00:00:00Z", type: "session_meta", payload: { id: "session-1" } },
+    event("2026-08-01T00:00:01Z", { type: "new_event" }),
+  ), "rollout.jsonl");
+  const exported = createTranscriptExport(transcript);
+  const payload = JSON.parse(exported.content) as { format: string; transcript: typeof transcript };
+
+  assert.equal(exported.filename, "rollout.agentsession.json");
+  assert.equal(payload.format, "agentsession.transcript.v1");
+  assert.deepEqual(payload.transcript.systemEvent, { new_event: 1 });
 });

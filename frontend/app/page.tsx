@@ -212,7 +212,10 @@ function viewerDocument(transcript: Transcript) {
       ? stat(`⏱ avg <b>${durationLabel(avgMs)}</b>`) + stat(`min <b>${durationLabel(minMs)}</b>`) + stat(`max <b>${durationLabel(maxMs)}</b>`)
       : "") +
     `</div>`;
-  const meta = { format: "codex-transcripts.viewer.v3", total: items.length, chunk_size: 200, chunks: [""], kinds: transcript.entries.map((entry) => entry.kind[0]).join(""), ids: items.map((_, index) => `msg-${index}`), ts: transcript.entries.map((entry) => entry.timestamp), groups: groups.map((group, index) => ({ start: groups.slice(0, index).reduce((total, item) => total + item.length, 0), end: groups.slice(0, index + 1).reduce((total, item) => total + item.length, 0) - 1, prompt: group.find((entry) => entry.kind === "user")?.content ?? null, filters: groupFilters[index] })) };
+  // The iframe receives every message inline in chunk 0, so its chunk size must
+  // cover the full transcript. A fixed size left later conversations waiting for
+  // chunk files that do not exist.
+  const meta = { format: "codex-transcripts.viewer.v3", total: items.length, chunk_size: Math.max(1, items.length), chunks: [""], kinds: transcript.entries.map((entry) => entry.kind[0]).join(""), ids: items.map((_, index) => `msg-${index}`), ts: transcript.entries.map((entry) => entry.timestamp), groups: groups.map((group, index) => ({ start: groups.slice(0, index).reduce((total, item) => total + item.length, 0), end: groups.slice(0, index + 1).reduce((total, item) => total + item.length, 0) - 1, prompt: group.find((entry) => entry.kind === "user")?.content ?? null, filters: groupFilters[index] })) };
   return `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/codex-transcripts.css"></head><body><div class="container"><div class="header-row"><h1>${assistantName} transcript</h1><button id="cmdk-trigger" class="cmdk-trigger" type="button"><svg class="cmdk-trigger-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg><span class="cmdk-trigger-label">Search</span><kbd class="cmdk-trigger-kbd">⌘K</kbd></button></div><div class="summary-row">${summaryHtml}${sortHtml}</div>${noticeHtml}<nav id="side-nav" class="side-nav" aria-label="Jump between conversations"></nav><div id="conversations" class="conversations">${summary}</div><footer class="conversation-end" aria-label="End of session">End of session</footer><aside id="detail-pane" class="detail-pane" aria-hidden="true"><div class="detail-header"><span class="detail-role" id="detail-role"></span><span class="detail-time" id="detail-time"></span><button class="detail-close" id="detail-close">×</button></div><div class="detail-body" id="detail-body"></div></aside><dialog id="cmdk" class="cmdk"><div class="cmdk-box"><div class="cmdk-input-row"><input id="cmdk-input" placeholder="Search commands and transcript…"></div><div id="cmdk-list" class="cmdk-list"></div><div class="cmdk-footer"><span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span><span><kbd>↵</kbd> Select</span><span><kbd>Esc</kbd> Close</span></div></div></dialog></div><script>window.__CODEX_TRANSCRIPTS_META__=${JSON.stringify(meta)};window.__CODEX_TRANSCRIPTS__={chunks:{0:${JSON.stringify(items)}}};</script><script src="/codex-transcripts-viewer.js"></script></body></html>`;
 }
 
@@ -275,7 +278,10 @@ export default function Home() {
   }
 
   if (transcript) {
-    return <iframe className="codex-transcript-frame" srcDoc={viewerDocument(transcript)} title={`${transcript.provider === "claude" ? "Claude" : "Codex"} transcript`} />;
+    return <iframe className="codex-transcript-frame" onLoad={(event) => {
+      event.currentTarget.focus({ preventScroll: true });
+      event.currentTarget.contentWindow?.focus();
+    }} srcDoc={viewerDocument(transcript)} tabIndex={0} title={`${transcript.provider === "claude" ? "Claude" : "Codex"} transcript`} />;
     /*
     const groups = groupConversation(transcript.entries);
     const matches = groups.map((group, index) => ({ group, index })).filter(({ group }) =>

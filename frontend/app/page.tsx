@@ -275,7 +275,7 @@ export default function Home() {
   }
 
   if (transcript) {
-    return <iframe className="codex-transcript-frame" srcDoc={viewerDocument(transcript)} title="Codex transcript" />;
+    return <iframe className="codex-transcript-frame" srcDoc={viewerDocument(transcript)} title={`${transcript.provider === "claude" ? "Claude" : "Codex"} transcript`} />;
     /*
     const groups = groupConversation(transcript.entries);
     const matches = groups.map((group, index) => ({ group, index })).filter(({ group }) =>

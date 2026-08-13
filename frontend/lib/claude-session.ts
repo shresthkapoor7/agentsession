@@ -116,6 +116,10 @@ export function parseClaudeSession(raw: string, filename: string): Transcript {
       if (type) bump(type);
       continue;
     }
+    if (!Number.isFinite(Date.parse(timestamp))) {
+      bump(`${type || "(missing)"}:invalid-timestamp`);
+      continue;
+    }
     lastTimestamp = timestamp;
     cwd = stringValue(record.cwd) || cwd;
     id = stringValue(record.sessionId) || id;

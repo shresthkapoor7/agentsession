@@ -83,3 +83,19 @@ test("accepts Claude's standard JSON loglines format", () => {
   assert.equal(transcript.provider, "claude");
   assert.equal(transcript.filename, "claude.json");
 });
+
+test("skips Claude records with invalid timestamps", () => {
+  const transcript = parseClaudeSession(session(
+    {
+      type: "user", timestamp: "not-a-date", sessionId: "claude-1", uuid: "invalid-prompt",
+      message: { role: "user", content: "Ignore this" },
+    },
+    {
+      type: "user", timestamp: "2026-08-01T00:00:00Z", sessionId: "claude-1", uuid: "prompt-1",
+      message: { role: "user", content: "Keep this" },
+    },
+  ), "claude.jsonl");
+
+  assert.deepEqual(transcript.entries.map((entry) => entry.content), ["Keep this"]);
+  assert.deepEqual(transcript.systemRollout, { "user:invalid-timestamp": 1 });
+});

@@ -430,6 +430,14 @@
       var vh = window.innerHeight || document.documentElement.clientHeight;
       var readingLine = vh * 0.34;
       var convs = document.querySelectorAll('#conversations .conversation');
+      if (!convs.length) return;
+      // The dashboard can fill the initial viewport before any conversation is
+      // readable. Keep the rail neutral until the first card reaches the same
+      // reading line used for every later selection.
+      if (convs[0].getBoundingClientRect().top > readingLine) {
+        setActiveGroup(-1);
+        return;
+      }
       var selectedGroup = -1;
       var nearestDistance = Infinity;
       for (var i = 0; i < convs.length; i++) {
@@ -447,7 +455,7 @@
         }
       }
       var atBottom = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2;
-      if (atBottom && convs.length) {
+      if (atBottom) {
         selectedGroup = parseInt(convs[convs.length - 1].getAttribute('data-group-index'), 10);
       }
       if (Number.isFinite(selectedGroup)) setActiveGroup(selectedGroup);

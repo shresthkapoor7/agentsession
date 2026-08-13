@@ -64,12 +64,12 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme]) {
     color-scheme: dark;
-    --accent: #4a90ff;
-    --bg-color: #0d0d0f;
+    --accent: #4278c3;
+    --bg-color: #000106;
     --card-bg: #161618;
     --user-bg: #1b2740;
     --user-border: var(--accent);
-    --assistant-bg: #0d0d0f;
+    --assistant-bg: #000106;
     --assistant-border: #4a4a52;
     --thinking-bg: #161618;
     --thinking-border: #4a4a52;
@@ -126,12 +126,12 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --accent: #4a90ff;
-  --bg-color: #0d0d0f;
+  --accent: #4278c3;
+  --bg-color: #000106;
   --card-bg: #161618;
   --user-bg: #1b2740;
   --user-border: var(--accent);
-  --assistant-bg: #0d0d0f;
+  --assistant-bg: #000106;
   --assistant-border: #4a4a52;
   --thinking-bg: #161618;
   --thinking-border: #4a4a52;

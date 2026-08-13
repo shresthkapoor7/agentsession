@@ -2,6 +2,7 @@
 
 import { useRef, useState } from "react";
 import { parseCodexRollout, type TokenUsage, type Transcript, type TranscriptEntry } from "@/lib/codex-rollout";
+import { parseClaudeSession } from "@/lib/claude-session";
 
 type FilePickerHandle = { getFile: () => Promise<File>; name: string };
 type FilePickerWindow = Window & {
@@ -67,12 +68,13 @@ function viewerMessageHtml(entry: TranscriptEntry, index: number) {
     : entry.kind === "assistant" ? `<div class="assistant-text">${renderMarkdown(entry.content)}</div>`
     : entry.kind === "tool" ? `<div class="tool-use"><div class="tool-header"><span class="tool-icon">⚙</span>${escapeHtml(entry.label)}</div><pre>${content}</pre></div>`
     : entry.kind === "result" ? `<div class="tool-result"><pre>${content}</pre></div>`
-    : `<div class="thinking"><div class="thinking-label">Session</div>${renderMarkdown(entry.content)}</div>`;
+    : `<div class="thinking"><div class="thinking-label">${escapeHtml(entry.label)}</div>${renderMarkdown(entry.content)}</div>`;
   const messageClass = entry.kind === "result" ? "tool-reply" : entry.kind === "notice" ? "system" : entry.kind;
   return `<div class="message ${messageClass}" id="${id}"><div class="message-content">${body}</div><div class="message-meta"><span class="role-label">${escapeHtml(entry.label)}</span><a href="#${id}" class="timestamp-link"><time datetime="${entry.timestamp}">${entry.timestamp}</time></a></div></div>`;
 }
 
 function viewerDocument(transcript: Transcript) {
+  const assistantName = transcript.provider === "claude" ? "Claude" : "Codex";
   const groups = groupConversation(transcript.entries);
   const groupDurations = groups.map((group) => {
     const start = Date.parse(group[0].timestamp);
@@ -131,7 +133,7 @@ function viewerDocument(transcript: Transcript) {
     const collapsed = response.replace(/\s+/g, " ").trim();
     const responsePreview = collapsed.slice(0, 600) + (collapsed.length > 600 ? "…" : "");
     const responseHtml = responsePreview
-      ? `<div class="conversation-response"><span class="conversation-response-label">Codex</span><div class="conversation-response-text"><p>${renderInline(responsePreview)}</p></div></div>`
+      ? `<div class="conversation-response"><span class="conversation-response-label">${assistantName}</span><div class="conversation-response-text"><p>${renderInline(responsePreview)}</p></div></div>`
       : "";
     const counts: Record<string, number> = {};
     group.forEach((entry) => { if (entry.kind === "tool") { const name = aliasTool(entry.label); counts[name] = (counts[name] ?? 0) + 1; } });
@@ -154,7 +156,7 @@ function viewerDocument(transcript: Transcript) {
   const systemTotal = [transcript.systemRollout, transcript.systemEvent, transcript.systemResponse]
     .reduce((total, counts) => total + Object.values(counts).reduce((sum, value) => sum + value, 0), 0);
   const noticeHtml = systemTotal
-    ? `<div class="system-records-notice"><div class="system-records-notice-title">System/internal records: ${systemTotal}</div><div class="system-records-notice-subtitle">Internal Codex records not shown in the transcript, grouped by type.</div><details><summary>Details (counts by type)</summary>${noticeSection("rollout", transcript.systemRollout)}${noticeSection("event_msg", transcript.systemEvent)}${noticeSection("response_item", transcript.systemResponse)}</details></div>`
+    ? `<div class="system-records-notice"><div class="system-records-notice-title">System/internal records: ${systemTotal}</div><div class="system-records-notice-subtitle">Internal ${assistantName} records not shown in the transcript, grouped by type.</div><details><summary>Details (counts by type)</summary>${noticeSection("rollout", transcript.systemRollout)}${noticeSection("event_msg", transcript.systemEvent)}${noticeSection("response_item", transcript.systemResponse)}</details></div>`
     : "";
   const sortHtml = `<section class="conversation-sort" aria-label="Sort conversations"><span class="conversation-sort-heading">Sort by</span><div class="sort-controls" role="group"><button class="sort-btn active" data-field="index" type="button">Order<span class="sort-caret">↑</span></button><button class="sort-btn" data-field="tokens" type="button">Tokens<span class="sort-caret"></span></button><button class="sort-btn" data-field="duration" type="button">Time taken<span class="sort-caret"></span></button><button class="sort-btn" data-field="tools" type="button">Tool calls<span class="sort-caret"></span></button></div></section>`;
   const stat = (inner: string) => `<span class="stat">${inner}</span>`;
@@ -201,7 +203,7 @@ function viewerDocument(transcript: Transcript) {
   const settingsHtml = [...settings.entries()].map(([setting, count]) => `<li><code>${escapeHtml(setting)}</code><span>${count} turn${count === 1 ? "" : "s"}</span></li>`).join("") || "<li>Unavailable</li>";
   const topTools = [...toolCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, count]) => `${count} ${escapeHtml(name)}`).join(" · ") || "No tool calls";
   const modelName = transcript.turnContexts.find((context) => context.model)?.model ?? "Model unavailable";
-  const dashboardHtml = `<section class="usage-dashboard" aria-labelledby="usage-heading"><div class="usage-header"><div><p class="usage-eyebrow">Local session telemetry</p><h2 id="usage-heading">Session usage</h2><p>${escapeHtml(modelName)} · ${transcript.usageEvents.length} usage updates · cumulative deltas are summed.</p></div><span class="usage-status">${completedTurns.length} completed${interruptedTurns.length ? ` · ${interruptedTurns.length} interrupted` : ""}</span></div><div class="usage-metrics">${metric("Processed tokens", tokenLabel(usage.total), `${tokenLabel(usage.input)} input across updates`)}${metric("Cached input", tokenLabel(usage.cachedInput), `${usage.input ? ((usage.cachedInput / usage.input) * 100).toFixed(1) : "0.0"}% of observed input`)}${metric("Generated", tokenLabel(usage.output), `Includes ${tokenLabel(usage.reasoning)} reasoning`)}${metric("Active task time", durationLabel(activeMs), `${durationLabel(elapsedMs)} elapsed session time`)}</div><div class="usage-detail-grid"><figure class="usage-chart"><figcaption><div><p class="usage-eyebrow">Completed tasks</p><h3>Processed-token activity</h3></div><span>Peak update: ${tokenLabel(Math.max(...transcript.usageEvents.map((event) => event.total), 0))}</span></figcaption><div class="usage-bars" role="img" aria-label="Processed token totals by completed task">${bars}</div><p>Each bar sums cumulative-usage deltas recorded within that task. This includes input context and generated output.</p></figure><section class="usage-activity" aria-label="Session activity"><div><p class="usage-eyebrow">Activity</p><h3>${[...toolCounts.values()].reduce((sum, count) => sum + count, 0)} tool calls · ${transcript.patchApplyCount} patches</h3><p>${topTools}</p></div><div><p class="usage-eyebrow">Model settings</p><ul>${settingsHtml}</ul></div></section></div><details class="usage-details"><summary>Session details</summary><dl><div><dt>Working directory</dt><dd>${escapeHtml(transcript.cwd ?? "Unavailable")}</dd></div><div><dt>Source</dt><dd>${escapeHtml([transcript.session.originator, transcript.session.source].filter(Boolean).join(" · ") || "Unavailable")}</dd></div><div><dt>CLI version</dt><dd>${escapeHtml(transcript.session.cliVersion ?? "Unavailable")}</dd></div><div><dt>Git revision</dt><dd>${escapeHtml([transcript.session.gitBranch, transcript.session.gitCommit?.slice(0, 12)].filter(Boolean).join(" · ") || "Unavailable")}</dd></div></dl></details></section>`;
+  const dashboardHtml = `<section class="usage-dashboard" aria-labelledby="usage-heading"><div class="usage-header"><div><p class="usage-eyebrow">Local session telemetry</p><h2 id="usage-heading">Session usage</h2><p>${escapeHtml(modelName)} · ${transcript.usageEvents.length} usage updates${transcript.provider === "codex" ? " · cumulative deltas are summed." : " · model-request totals are summed."}</p></div><span class="usage-status">${completedTurns.length} completed${interruptedTurns.length ? ` · ${interruptedTurns.length} interrupted` : ""}</span></div><div class="usage-metrics">${metric("Processed tokens", tokenLabel(usage.total), `${tokenLabel(usage.input)} input across updates`)}${metric("Cached input", tokenLabel(usage.cachedInput), `${usage.input ? ((usage.cachedInput / usage.input) * 100).toFixed(1) : "0.0"}% of observed input`)}${metric("Generated", tokenLabel(usage.output), `Includes ${tokenLabel(usage.reasoning)} reasoning`)}${metric("Active task time", durationLabel(activeMs), `${durationLabel(elapsedMs)} elapsed session time`)}</div><div class="usage-detail-grid"><figure class="usage-chart"><figcaption><div><p class="usage-eyebrow">Completed tasks</p><h3>Processed-token activity</h3></div><span>Peak update: ${tokenLabel(Math.max(...transcript.usageEvents.map((event) => event.total), 0))}</span></figcaption><div class="usage-bars" role="img" aria-label="Processed token totals by completed task">${bars}</div><p>Each bar sums ${transcript.provider === "codex" ? "cumulative-usage deltas" : "model-request totals"} recorded within that task. This includes input context and generated output.</p></figure><section class="usage-activity" aria-label="Session activity"><div><p class="usage-eyebrow">Activity</p><h3>${[...toolCounts.values()].reduce((sum, count) => sum + count, 0)} tool calls · ${transcript.patchApplyCount} patches</h3><p>${topTools}</p></div><div><p class="usage-eyebrow">Model settings</p><ul>${settingsHtml}</ul></div></section></div><details class="usage-details"><summary>Session details</summary><dl><div><dt>Working directory</dt><dd>${escapeHtml(transcript.cwd ?? "Unavailable")}</dd></div><div><dt>Source</dt><dd>${escapeHtml([transcript.session.originator, transcript.session.source].filter(Boolean).join(" · ") || "Unavailable")}</dd></div><div><dt>CLI version</dt><dd>${escapeHtml(transcript.session.cliVersion ?? "Unavailable")}</dd></div><div><dt>Git revision</dt><dd>${escapeHtml([transcript.session.gitBranch, transcript.session.gitCommit?.slice(0, 12)].filter(Boolean).join(" · ") || "Unavailable")}</dd></div></dl></details></section>`;
   const summaryHtml =
     dashboardHtml + `<div class="viewer-summary">` +
     stat(`<b>${groups.length}</b> conversations`) +
@@ -210,8 +212,12 @@ function viewerDocument(transcript: Transcript) {
       ? stat(`⏱ avg <b>${durationLabel(avgMs)}</b>`) + stat(`min <b>${durationLabel(minMs)}</b>`) + stat(`max <b>${durationLabel(maxMs)}</b>`)
       : "") +
     `</div>`;
-  const meta = { format: "codex-transcripts.viewer.v3", total: items.length, chunk_size: 200, chunks: [""], kinds: transcript.entries.map((entry) => entry.kind[0]).join(""), ids: items.map((_, index) => `msg-${index}`), ts: transcript.entries.map((entry) => entry.timestamp), groups: groups.map((group, index) => ({ start: groups.slice(0, index).reduce((total, item) => total + item.length, 0), end: groups.slice(0, index + 1).reduce((total, item) => total + item.length, 0) - 1, prompt: group.find((entry) => entry.kind === "user")?.content ?? null, filters: groupFilters[index] })) };
-  return `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/codex-transcripts.css"></head><body><div class="container"><div class="header-row"><h1>Codex transcript</h1><button id="cmdk-trigger" class="cmdk-trigger" type="button"><svg class="cmdk-trigger-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg><span class="cmdk-trigger-label">Search</span><kbd class="cmdk-trigger-kbd">⌘K</kbd></button></div><div class="summary-row">${summaryHtml}${sortHtml}</div>${noticeHtml}<nav id="side-nav" class="side-nav" aria-label="Jump between conversations"></nav><div id="conversations" class="conversations">${summary}</div><footer class="conversation-end" aria-label="End of session">End of session</footer><aside id="detail-pane" class="detail-pane" aria-hidden="true"><div class="detail-header"><span class="detail-role" id="detail-role"></span><span class="detail-time" id="detail-time"></span><button class="detail-close" id="detail-close">×</button></div><div class="detail-body" id="detail-body"></div></aside><dialog id="cmdk" class="cmdk"><div class="cmdk-box"><div class="cmdk-input-row"><input id="cmdk-input" placeholder="Search commands and transcript…"></div><div id="cmdk-list" class="cmdk-list"></div><div class="cmdk-footer"><span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span><span><kbd>↵</kbd> Select</span><span><kbd>Esc</kbd> Close</span></div></div></dialog></div><script>window.__CODEX_TRANSCRIPTS_META__=${JSON.stringify(meta)};window.__CODEX_TRANSCRIPTS__={chunks:{0:${JSON.stringify(items)}}};</script><script src="/codex-transcripts-viewer.js"></script></body></html>`;
+  // The iframe receives every message inline in chunk 0, so its chunk size must
+  // cover the full transcript. A fixed size left later conversations waiting for
+  // chunk files that do not exist.
+  const meta = { format: "codex-transcripts.viewer.v3", total: items.length, chunk_size: Math.max(1, items.length), chunks: [""], kinds: transcript.entries.map((entry) => entry.kind[0]).join(""), ids: items.map((_, index) => `msg-${index}`), ts: transcript.entries.map((entry) => entry.timestamp), groups: groups.map((group, index) => ({ start: groups.slice(0, index).reduce((total, item) => total + item.length, 0), end: groups.slice(0, index + 1).reduce((total, item) => total + item.length, 0) - 1, prompt: group.find((entry) => entry.kind === "user")?.content ?? null, filters: groupFilters[index] })) };
+  const scriptJson = (value: unknown) => JSON.stringify(value).replace(/</g, "\\u003c");
+  return `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/codex-transcripts.css"></head><body><div class="container"><div class="header-row"><h1>${assistantName} transcript</h1><button id="cmdk-trigger" class="cmdk-trigger" type="button"><svg class="cmdk-trigger-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg><span class="cmdk-trigger-label">Search</span><kbd class="cmdk-trigger-kbd">⌘K</kbd></button></div><div class="summary-row">${summaryHtml}${sortHtml}</div>${noticeHtml}<nav id="side-nav" class="side-nav" aria-label="Jump between conversations"></nav><div id="conversations" class="conversations">${summary}</div><footer class="conversation-end" aria-label="End of session">End of session</footer><aside id="detail-pane" class="detail-pane" aria-hidden="true"><div class="detail-header"><span class="detail-role" id="detail-role"></span><span class="detail-time" id="detail-time"></span><button class="detail-close" id="detail-close">×</button></div><div class="detail-body" id="detail-body"></div></aside><dialog id="cmdk" class="cmdk"><div class="cmdk-box"><div class="cmdk-input-row"><input id="cmdk-input" placeholder="Search commands and transcript…"></div><div id="cmdk-list" class="cmdk-list"></div><div class="cmdk-footer"><span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span><span><kbd>↵</kbd> Select</span><span><kbd>Esc</kbd> Close</span></div></div></dialog></div><script>window.__CODEX_TRANSCRIPTS_META__=${scriptJson(meta)};window.__CODEX_TRANSCRIPTS__={chunks:{0:${scriptJson(items)}}};</script><script src="/codex-transcripts-viewer.js"></script></body></html>`;
 }
 
 type ProviderKey = "codex" | "claude";
@@ -233,11 +239,12 @@ export default function Home() {
     navigator.clipboard.writeText(cfg.path).then(() => setPathCopied(true)).catch(() => setPathCopied(false));
   }
 
-  async function loadCodexFile(file: File) {
+  async function loadSessionFile(file: File) {
     setIsLoading(true);
     setError(null);
     try {
-      setTranscript(parseCodexRollout(await file.text(), file.name));
+      const raw = await file.text();
+      setTranscript(provider === "claude" ? parseClaudeSession(raw, file.name) : parseCodexRollout(raw, file.name));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not read this transcript.");
     } finally {
@@ -245,7 +252,7 @@ export default function Home() {
     }
   }
 
-  async function openCodexPicker() {
+  async function openSessionPicker() {
     setError(null);
     try {
       await navigator.clipboard.writeText(cfg.path);
@@ -262,9 +269,9 @@ export default function Home() {
     try {
       const [handle] = await picker({
         multiple: false,
-        types: [{ description: "Codex rollout", accept: { "application/json": [".jsonl"] } }],
+        types: [{ description: provider === "claude" ? "Claude Code session" : "Codex rollout", accept: { "application/json": [".jsonl", ".json"] } }],
       });
-      if (handle) await loadCodexFile(await handle.getFile());
+      if (handle) await loadSessionFile(await handle.getFile());
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === "AbortError") return;
       setError("The file picker could not be opened. Please try again.");
@@ -272,7 +279,10 @@ export default function Home() {
   }
 
   if (transcript) {
-    return <iframe className="codex-transcript-frame" srcDoc={viewerDocument(transcript)} title="Codex transcript" />;
+    return <iframe className="codex-transcript-frame" onLoad={(event) => {
+      event.currentTarget.focus({ preventScroll: true });
+      event.currentTarget.contentWindow?.focus();
+    }} srcDoc={viewerDocument(transcript)} tabIndex={0} title={`${transcript.provider === "claude" ? "Claude" : "Codex"} transcript`} />;
     /*
     const groups = groupConversation(transcript.entries);
     const matches = groups.map((group, index) => ({ group, index })).filter(({ group }) =>
@@ -357,11 +367,11 @@ export default function Home() {
           Copy the path above. In the file dialog, press <kbd>⌘</kbd> <kbd>Shift</kbd> <kbd>G</kbd>, paste it, hit Return, then pick your file.
         </p>
 
-        <button className="open-session" disabled={isLoading} onClick={openCodexPicker} type="button">
+        <button className="open-session" disabled={isLoading} onClick={openSessionPicker} type="button">
           {isLoading ? "Reading…" : "Open session"}
         </button>
 
-        <input accept=".jsonl,application/json" className="file-input" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadCodexFile(file); }} ref={fallbackInput} type="file" />
+        <input accept=".jsonl,.json,application/json" className="file-input" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadSessionFile(file); }} ref={fallbackInput} type="file" />
         {error ? <p className="error-message" role="alert">{error}</p> : null}
       </section>
     </main>

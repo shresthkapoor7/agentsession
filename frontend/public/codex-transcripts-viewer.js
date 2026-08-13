@@ -404,6 +404,7 @@
         var g = parseInt(gi, 10);
         var card = getConversationEl(g);
         if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        btn.focus({ preventScroll: true });
       });
       nav.appendChild(btn);
       sideTicks.push(btn);

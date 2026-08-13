@@ -47,6 +47,7 @@ export type Transcript = {
   id: string | null;
   filename: string;
   patchApplyCount: number;
+  provider: "claude" | "codex";
   session: SessionDetails;
   systemRollout: Record<string, number>;
   systemEvent: Record<string, number>;
@@ -239,7 +240,7 @@ export function parseCodexRollout(raw: string, filename: string): Transcript {
   }
 
   return {
-    cwd, entries, filename, id, patchApplyCount, session, systemRollout, systemEvent, systemResponse,
+    cwd, entries, filename, id, patchApplyCount, provider: "codex", session, systemRollout, systemEvent, systemResponse,
     turns: [...turns.values()].sort((a, b) => a.startedAt.localeCompare(b.startedAt)),
     turnContexts: turnContexts.sort((a, b) => a.ts.localeCompare(b.ts)),
     usageEvents: usageEvents.sort((a, b) => a.ts.localeCompare(b.ts)),

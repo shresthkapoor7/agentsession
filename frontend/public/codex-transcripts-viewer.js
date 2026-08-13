@@ -357,7 +357,8 @@
   }
 
   // ---------------------------------------------------------------------------
-  // Side navigator: one tick per conversation. The active/hovered tick grows.
+  // Side navigator: one tick per conversation. Exactly one reflects the reading
+  // position; hover is only a preview affordance, never a second active state.
   // ---------------------------------------------------------------------------
   var sideTicks = [];
   var tickByGroup = {};
@@ -393,6 +394,7 @@
       btn.className = 'side-nav-tick';
       btn.type = 'button';
       btn.dataset.groupIndex = gi;
+      btn.dataset.previewEdge = 'middle';
       btn.setAttribute('aria-label', label + ' ' + preview);
       btn.innerHTML =
         '<span class="side-nav-bar"></span>' +
@@ -408,6 +410,11 @@
       tickByGroup[gi] = btn;
     });
 
+    sideTicks.forEach(function(tick, index) {
+      if (index === 0) tick.dataset.previewEdge = 'start';
+      else if (index === sideTicks.length - 1) tick.dataset.previewEdge = 'end';
+    });
+
     setupSideNavScrollSpy();
   }
 
@@ -415,32 +422,43 @@
     if (!document.querySelectorAll('.conversation').length) return;
     var ticking = false;
 
-    // Highlight every conversation whose card overlaps a band near the top of the
-    // viewport. Usually that's one turn; while scrolling across a boundary two turns
-    // straddle the band and both light up (T3-style). Every turn passes through it,
-    // so the rail reaches all of them. Cards are re-queried each frame so this stays
-    // correct after the list is re-sorted.
+    // Use one stable reading anchor instead of a wide overlap band. A band can
+    // legitimately contain two cards, which caused the minimap to light multiple
+    // ticks at boundaries and again at the document bottom.
     function update() {
       ticking = false;
       var vh = window.innerHeight || document.documentElement.clientHeight;
-      var bandTop = vh * 0.22;
-      var bandBottom = vh * 0.55;
+      var readingLine = vh * 0.34;
       var convs = document.querySelectorAll('#conversations .conversation');
-      var anyActive = false;
-      var lastTick = null;
+      if (!convs.length) return;
+      // The dashboard can fill the initial viewport before any conversation is
+      // readable. Keep the rail neutral until the first card reaches the same
+      // reading line used for every later selection.
+      if (convs[0].getBoundingClientRect().top > readingLine) {
+        setActiveGroup(-1);
+        return;
+      }
+      var selectedGroup = -1;
+      var nearestDistance = Infinity;
       for (var i = 0; i < convs.length; i++) {
-        var tick = tickByGroup[convs[i].getAttribute('data-group-index')];
-        if (!tick) continue;
         var rect = convs[i].getBoundingClientRect();
-        var inBand = rect.bottom > bandTop && rect.top < bandBottom;
-        tick.classList.toggle('active', inBand);
-        if (inBand) anyActive = true;
-        if (rect.bottom > 0 && rect.top < vh) lastTick = tick;
+        var groupIndex = parseInt(convs[i].getAttribute('data-group-index'), 10);
+        if (!Number.isFinite(groupIndex)) continue;
+        if (rect.top <= readingLine && rect.bottom >= readingLine) {
+          selectedGroup = groupIndex;
+          break;
+        }
+        var distance = rect.bottom < readingLine ? readingLine - rect.bottom : rect.top - readingLine;
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          selectedGroup = groupIndex;
+        }
       }
       var atBottom = window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 2;
-      // Fallbacks: at the very bottom (or if nothing hit the band) keep the last
-      // visible turn lit so the rail never goes fully dark.
-      if ((atBottom || !anyActive) && lastTick) lastTick.classList.add('active');
+      if (atBottom) {
+        selectedGroup = parseInt(convs[convs.length - 1].getAttribute('data-group-index'), 10);
+      }
+      if (Number.isFinite(selectedGroup)) setActiveGroup(selectedGroup);
     }
 
     function onScroll() {

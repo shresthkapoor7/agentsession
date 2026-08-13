@@ -11,15 +11,58 @@ type TranscriptEntry = {
   timestamp: string;
 };
 
+type TokenUsage = {
+  cachedInput: number;
+  cacheWrite: number;
+  input: number;
+  output: number;
+  reasoning: number;
+  total: number;
+};
+
+type UsageEvent = TokenUsage & { ts: string };
+
+type UsageSnapshot = {
+  cumulative: boolean;
+  usage: TokenUsage;
+};
+
+type SessionTurn = {
+  completedAt: string | null;
+  durationMs: number | null;
+  id: string;
+  startedAt: string;
+  status: "completed" | "interrupted" | "running";
+};
+
+type TurnContext = {
+  effort: string | null;
+  model: string | null;
+  ts: string;
+  turnId: string | null;
+};
+
+type SessionDetails = {
+  cliVersion: string | null;
+  gitBranch: string | null;
+  gitCommit: string | null;
+  originator: string | null;
+  source: string | null;
+};
+
 type Transcript = {
   cwd: string | null;
   entries: TranscriptEntry[];
   id: string | null;
   filename: string;
+  patchApplyCount: number;
+  session: SessionDetails;
   systemRollout: Record<string, number>;
   systemEvent: Record<string, number>;
   systemResponse: Record<string, number>;
-  statEvents: Array<{ ts: string; name: string; tokenCount?: number }>;
+  turns: SessionTurn[];
+  turnContexts: TurnContext[];
+  usageEvents: UsageEvent[];
 };
 
 // Record types the CLI viewer renders/handles (so they are NOT counted as
@@ -49,23 +92,59 @@ function prettyValue(value: unknown) {
   }
 }
 
-function tokenCountFromPayload(payload: Record<string, unknown>) {
+function numberValue(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
+}
+
+function usageFromPayload(payload: Record<string, unknown>): UsageSnapshot | null {
   const info = payload.info;
-  if (!info || typeof info !== "object") return 0;
-  const usage = (info as Record<string, unknown>).last_token_usage ?? (info as Record<string, unknown>).total_token_usage;
-  if (!usage || typeof usage !== "object") return 0;
-  const count = (usage as Record<string, unknown>).total_tokens;
-  return typeof count === "number" && Number.isFinite(count) && count >= 0 ? count : 0;
+  if (!info || typeof info !== "object") return null;
+  const infoValues = info as Record<string, unknown>;
+  const cumulative = infoValues.total_token_usage;
+  const usage = cumulative ?? infoValues.last_token_usage;
+  if (!usage || typeof usage !== "object") return null;
+  const values = usage as Record<string, unknown>;
+  const input = numberValue(values.input_tokens);
+  const output = numberValue(values.output_tokens);
+  return {
+    cumulative: Boolean(cumulative && typeof cumulative === "object"),
+    usage: {
+      input,
+      cachedInput: numberValue(values.cached_input_tokens),
+      cacheWrite: numberValue(values.cache_write_input_tokens),
+      output,
+      reasoning: numberValue(values.reasoning_output_tokens),
+      total: numberValue(values.total_tokens) || input + output,
+    },
+  };
+}
+
+function usageDelta(current: TokenUsage, previous: TokenUsage | null): TokenUsage {
+  if (!previous || current.total < previous.total) return current;
+  const delta = (key: keyof TokenUsage) => Math.max(0, current[key] - previous[key]);
+  return {
+    input: delta("input"),
+    cachedInput: delta("cachedInput"),
+    cacheWrite: delta("cacheWrite"),
+    output: delta("output"),
+    reasoning: delta("reasoning"),
+    total: delta("total"),
+  };
 }
 
 function parseCodexRollout(raw: string, filename: string): Transcript {
   const entries: TranscriptEntry[] = [];
   let cwd: string | null = null;
   let id: string | null = null;
+  const session: SessionDetails = { cliVersion: null, gitBranch: null, gitCommit: null, originator: null, source: null };
   const systemRollout: Record<string, number> = {};
   const systemEvent: Record<string, number> = {};
   const systemResponse: Record<string, number> = {};
-  const statEvents: Array<{ ts: string; name: string; tokenCount?: number }> = [];
+  const usageEvents: UsageEvent[] = [];
+  let previousUsage: TokenUsage | null = null;
+  const turns = new Map<string, SessionTurn>();
+  const turnContexts: TurnContext[] = [];
+  let patchApplyCount = 0;
   const bump = (map: Record<string, number>, key: string) => { map[key] = (map[key] ?? 0) + 1; };
 
   for (const line of raw.split("\n")) {
@@ -86,6 +165,14 @@ function parseCodexRollout(raw: string, filename: string): Transcript {
     if (record.type === "session_meta") {
       cwd = stringValue(data.cwd) || cwd;
       id = stringValue(data.id) || id;
+      session.cliVersion = stringValue(data.cli_version) || session.cliVersion;
+      session.originator = stringValue(data.originator) || session.originator;
+      session.source = stringValue(data.source) || session.source;
+      const git = data.git;
+      if (git && typeof git === "object") {
+        session.gitBranch = stringValue((git as Record<string, unknown>).branch) || session.gitBranch;
+        session.gitCommit = stringValue((git as Record<string, unknown>).commit_hash) || session.gitCommit;
+      }
       continue;
     }
 
@@ -106,8 +193,27 @@ function parseCodexRollout(raw: string, filename: string): Transcript {
           label: "Session",
           timestamp,
         });
+        const turn = turns.get(stringValue(data.turn_id));
+        if (turn) turn.status = "interrupted";
       } else if (eventType === "token_count") {
-        statEvents.push({ ts: timestamp, name: "token_count", tokenCount: tokenCountFromPayload(data) });
+        const snapshot = usageFromPayload(data);
+        if (snapshot) {
+          usageEvents.push({ ts: timestamp, ...(snapshot.cumulative ? usageDelta(snapshot.usage, previousUsage) : snapshot.usage) });
+          previousUsage = snapshot.cumulative ? snapshot.usage : null;
+        }
+      } else if (eventType === "task_started") {
+        const turnId = stringValue(data.turn_id) || `unknown-${timestamp}`;
+        turns.set(turnId, { id: turnId, startedAt: timestamp, completedAt: null, durationMs: null, status: "running" });
+      } else if (eventType === "task_complete") {
+        const turnId = stringValue(data.turn_id);
+        const existing = turns.get(turnId);
+        if (existing) {
+          existing.completedAt = timestamp;
+          existing.durationMs = numberValue(data.duration_ms) || null;
+          existing.status = "completed";
+        }
+      } else if (eventType === "patch_apply_end") {
+        patchApplyCount += 1;
       } else if (!HANDLED_EVENT.has(eventType)) {
         bump(systemEvent, eventType || "(missing)");
       }
@@ -116,7 +222,14 @@ function parseCodexRollout(raw: string, filename: string): Transcript {
 
     if (record.type !== "response_item") {
       const rolloutType = stringValue(record.type);
-      if (rolloutType === "turn_context") statEvents.push({ ts: timestamp, name: "turn_context" });
+      if (rolloutType === "turn_context") {
+        turnContexts.push({
+          ts: timestamp,
+          turnId: stringValue(data.turn_id) || null,
+          model: stringValue(data.model) || null,
+          effort: stringValue(data.effort) || null,
+        });
+      }
       else if (rolloutType && !HANDLED_ROLLOUT.has(rolloutType)) bump(systemRollout, rolloutType);
       continue;
     }
@@ -137,7 +250,17 @@ function parseCodexRollout(raw: string, filename: string): Transcript {
     throw new Error("This file does not contain readable Codex rollout records.");
   }
 
-  return { cwd, entries, filename, id, systemRollout, systemEvent, systemResponse, statEvents };
+  for (const turn of turns.values()) {
+    if (turn.status !== "running") continue;
+    const aborted = entries.some((entry) => entry.kind === "notice" && entry.timestamp >= turn.startedAt && entry.content.toLowerCase().includes("turn aborted"));
+    if (aborted) turn.status = "interrupted";
+  }
+  return {
+    cwd, entries, filename, id, patchApplyCount, session, systemRollout, systemEvent, systemResponse,
+    turns: [...turns.values()].sort((a, b) => a.startedAt.localeCompare(b.startedAt)),
+    turnContexts: turnContexts.sort((a, b) => a.ts.localeCompare(b.ts)),
+    usageEvents: usageEvents.sort((a, b) => a.ts.localeCompare(b.ts)),
+  };
 }
 
 function groupConversation(entries: TranscriptEntry[]) {
@@ -216,7 +339,12 @@ function viewerDocument(transcript: Transcript) {
     if (minutes < 60) return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`;
     return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
   };
-  // Per-conversation tool/token/turn-context stats (matches the CLI meta line).
+  const tokenLabel = (tokens: number) => {
+    if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(tokens >= 10_000_000 ? 0 : 1).replace(/\.0$/, "")}M`;
+    if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(tokens >= 10_000 ? 0 : 1).replace(/\.0$/, "")}K`;
+    return String(tokens);
+  };
+  // Per-conversation metrics are assigned by their event timestamps.
   const groupStartMs = groups.map((group) => (group.length ? Date.parse(group[0].timestamp) : 0));
   const groupIndexForTs = (ts: string) => {
     const ms = Date.parse(ts);
@@ -229,21 +357,15 @@ function viewerDocument(transcript: Transcript) {
     if (["local_shell_call", "shell", "exec_command", "bash"].includes(lower)) return "exec";
     return name;
   };
-  const statCounts = groups.map(() => ({}) as Record<string, number>);
-  for (const event of transcript.statEvents) {
-    const groupIndex = groupIndexForTs(event.ts);
-    if (statCounts[groupIndex]) statCounts[groupIndex][event.name] = (statCounts[groupIndex][event.name] ?? 0) + 1;
-  }
   const groupFilters = groups.map((group, index) => {
-    const tokenCount = transcript.statEvents.reduce((latest, event) =>
-      groupIndexForTs(event.ts) === index && event.name === "token_count" ? (event.tokenCount ?? latest) : latest, 0);
+    const tokenCount = transcript.usageEvents.reduce((total, event) =>
+      groupIndexForTs(event.ts) === index ? total + event.total : total, 0);
     const tools = group.filter((entry) => entry.kind === "tool");
     return {
       duration_ms: groupDurations[index],
       token_count: tokenCount,
       tool_calls: tools.length,
       exec_count: tools.filter((entry) => aliasTool(entry.label) === "exec").length,
-      turn_context: transcript.statEvents.some((event) => groupIndexForTs(event.ts) === index && event.name === "turn_context"),
       interrupted: group.some((entry) => entry.kind === "notice" && entry.content.toLowerCase().includes("turn aborted")),
       context_compacted: group.some((entry) => entry.kind === "notice" && entry.content.toLowerCase().includes("context compacted")),
       commits: group.filter((entry) => entry.kind === "result").some((entry) => /\[[\w/-]+ [a-f0-9]{7,}\]/i.test(entry.content)) ? 1 : 0,
@@ -263,14 +385,16 @@ function viewerDocument(transcript: Transcript) {
     const responseHtml = responsePreview
       ? `<div class="conversation-response"><span class="conversation-response-label">Codex</span><div class="conversation-response-text"><p>${renderInline(responsePreview)}</p></div></div>`
       : "";
-    const counts: Record<string, number> = { ...statCounts[index] };
+    const counts: Record<string, number> = {};
     group.forEach((entry) => { if (entry.kind === "tool") { const name = aliasTool(entry.label); counts[name] = (counts[name] ?? 0) + 1; } });
     const statsStr = Object.entries(counts)
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
       .map(([name, count]) => `${count} ${name}`)
       .join(" · ");
     const durationMs = groupDurations[index];
-    const metaExtra = [statsStr, `⏱ ${durationLabel(durationMs)}`].filter(Boolean).join(" · ");
+    const tokens = groupFilters[index].token_count;
+    const tokenLabel = tokens >= 1_000_000 ? `${(tokens / 1_000_000).toFixed(1)}M` : tokens >= 1_000 ? `${Math.round(tokens / 1_000)}K` : String(tokens);
+    const metaExtra = [statsStr, tokens ? `${tokenLabel} processed` : "", `⏱ ${durationLabel(durationMs)}`].filter(Boolean).join(" · ");
     const html = `<details class="conversation index-item" data-group-index="${index}" data-start="${start}" data-end="${end}"><summary class="conversation-summary" data-preview="${escapeHtml(prompt)}" data-label="#${index + 1}"><div class="index-item-content conversation-prompt"><p>${renderInline(prompt)}</p></div><div class="conversation-meta"><span class="index-item-number">#${index + 1}</span><span class="conversation-jump"><time datetime="${group[0].timestamp}">${group[0].timestamp}</time></span><span class="conversation-stats-line">· ${metaExtra}</span></div>${responseHtml}</summary><div class="conversation-body"><div class="conversation-messages" id="group-${index}"></div></div></details>`;
     start = end + 1;
     return html;
@@ -286,8 +410,52 @@ function viewerDocument(transcript: Transcript) {
     : "";
   const sortHtml = `<section class="conversation-sort" aria-label="Sort conversations"><span class="conversation-sort-heading">Sort by</span><div class="sort-controls" role="group"><button class="sort-btn active" data-field="index" type="button">Order<span class="sort-caret">↑</span></button><button class="sort-btn" data-field="tokens" type="button">Tokens<span class="sort-caret"></span></button><button class="sort-btn" data-field="duration" type="button">Time taken<span class="sort-caret"></span></button><button class="sort-btn" data-field="tools" type="button">Tool calls<span class="sort-caret"></span></button></div></section>`;
   const stat = (inner: string) => `<span class="stat">${inner}</span>`;
+  const usage = transcript.usageEvents.reduce<TokenUsage>((total, event) => ({
+    input: total.input + event.input,
+    cachedInput: total.cachedInput + event.cachedInput,
+    cacheWrite: total.cacheWrite + event.cacheWrite,
+    output: total.output + event.output,
+    reasoning: total.reasoning + event.reasoning,
+    total: total.total + event.total,
+  }), { input: 0, cachedInput: 0, cacheWrite: 0, output: 0, reasoning: 0, total: 0 });
+  const completedTurns = transcript.turns.filter((turn) => turn.status === "completed");
+  const interruptedTurns = transcript.turns.filter((turn) => turn.status === "interrupted");
+  const activeMs = completedTurns.reduce((total, turn) => total + (turn.durationMs ?? 0), 0);
+  const firstTurn = transcript.turns[0];
+  const lastTurn = [...transcript.turns].reverse().find((turn) => turn.completedAt);
+  const elapsedMs = firstTurn && lastTurn?.completedAt
+    ? Math.max(0, Date.parse(lastTurn.completedAt) - Date.parse(firstTurn.startedAt)) : 0;
+  const usageByTurn = completedTurns.map((turn, index) => {
+    const startMs = Date.parse(turn.startedAt);
+    const endMs = Date.parse(turn.completedAt ?? turn.startedAt);
+    const processed = transcript.usageEvents.reduce((total, event) => {
+      const eventMs = Date.parse(event.ts);
+      return eventMs >= startMs && eventMs <= endMs ? total + event.total : total;
+    }, 0);
+    return { index: index + 1, processed, turn };
+  });
+  const peakTurn = Math.max(...usageByTurn.map((turn) => turn.processed), 1);
+  const settings = new Map<string, number>();
+  for (const context of transcript.turnContexts) {
+    const name = [context.model, context.effort].filter(Boolean).join(" · ") || "Unavailable";
+    settings.set(name, (settings.get(name) ?? 0) + 1);
+  }
+  const toolCounts = new Map<string, number>();
+  for (const entry of transcript.entries) {
+    if (entry.kind !== "tool") continue;
+    const name = aliasTool(entry.label);
+    toolCounts.set(name, (toolCounts.get(name) ?? 0) + 1);
+  }
+  const metric = (label: string, value: string, detail: string) => `<article class="usage-metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><p>${escapeHtml(detail)}</p></article>`;
+  const bars = usageByTurn.length
+    ? usageByTurn.map(({ index, processed, turn }) => `<div class="usage-bar-item"><span>${index}</span><div class="usage-bar-track"><div class="usage-bar" style="height:${Math.max(8, Math.round((processed / peakTurn) * 100))}%" title="Task ${index}: ${tokenLabel(processed)} processed tokens in ${durationLabel(turn.durationMs ?? 0)}"></div></div><b>${tokenLabel(processed)}</b></div>`).join("")
+    : `<p class="usage-empty">No task-level usage is available in this session.</p>`;
+  const settingsHtml = [...settings.entries()].map(([setting, count]) => `<li><code>${escapeHtml(setting)}</code><span>${count} turn${count === 1 ? "" : "s"}</span></li>`).join("") || "<li>Unavailable</li>";
+  const topTools = [...toolCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, count]) => `${count} ${escapeHtml(name)}`).join(" · ") || "No tool calls";
+  const modelName = transcript.turnContexts.find((context) => context.model)?.model ?? "Model unavailable";
+  const dashboardHtml = `<section class="usage-dashboard" aria-labelledby="usage-heading"><div class="usage-header"><div><p class="usage-eyebrow">Local session telemetry</p><h2 id="usage-heading">Session usage</h2><p>${escapeHtml(modelName)} · ${transcript.usageEvents.length} usage updates · cumulative deltas are summed.</p></div><span class="usage-status">${completedTurns.length} completed${interruptedTurns.length ? ` · ${interruptedTurns.length} interrupted` : ""}</span></div><div class="usage-metrics">${metric("Processed tokens", tokenLabel(usage.total), `${tokenLabel(usage.input)} input across updates`)}${metric("Cached input", tokenLabel(usage.cachedInput), `${usage.input ? ((usage.cachedInput / usage.input) * 100).toFixed(1) : "0.0"}% of observed input`)}${metric("Generated", tokenLabel(usage.output), `Includes ${tokenLabel(usage.reasoning)} reasoning`)}${metric("Active task time", durationLabel(activeMs), `${durationLabel(elapsedMs)} elapsed session time`)}</div><div class="usage-detail-grid"><figure class="usage-chart"><figcaption><div><p class="usage-eyebrow">Completed tasks</p><h3>Processed-token activity</h3></div><span>Peak update: ${tokenLabel(Math.max(...transcript.usageEvents.map((event) => event.total), 0))}</span></figcaption><div class="usage-bars" role="img" aria-label="Processed token totals by completed task">${bars}</div><p>Each bar sums cumulative-usage deltas recorded within that task. This includes input context and generated output.</p></figure><section class="usage-activity" aria-label="Session activity"><div><p class="usage-eyebrow">Activity</p><h3>${[...toolCounts.values()].reduce((sum, count) => sum + count, 0)} tool calls · ${transcript.patchApplyCount} patches</h3><p>${topTools}</p></div><div><p class="usage-eyebrow">Model settings</p><ul>${settingsHtml}</ul></div></section></div><details class="usage-details"><summary>Session details</summary><dl><div><dt>Working directory</dt><dd>${escapeHtml(transcript.cwd ?? "Unavailable")}</dd></div><div><dt>Source</dt><dd>${escapeHtml([transcript.session.originator, transcript.session.source].filter(Boolean).join(" · ") || "Unavailable")}</dd></div><div><dt>CLI version</dt><dd>${escapeHtml(transcript.session.cliVersion ?? "Unavailable")}</dd></div><div><dt>Git revision</dt><dd>${escapeHtml([transcript.session.gitBranch, transcript.session.gitCommit?.slice(0, 12)].filter(Boolean).join(" · ") || "Unavailable")}</dd></div></dl></details></section>`;
   const summaryHtml =
-    `<div class="viewer-summary">` +
+    dashboardHtml + `<div class="viewer-summary">` +
     stat(`<b>${groups.length}</b> conversations`) +
     stat(`<b>${items.length}</b> messages`) +
     (taskDurations.length
@@ -295,7 +463,7 @@ function viewerDocument(transcript: Transcript) {
       : "") +
     `</div>`;
   const meta = { format: "codex-transcripts.viewer.v3", total: items.length, chunk_size: 200, chunks: [""], kinds: transcript.entries.map((entry) => entry.kind[0]).join(""), ids: items.map((_, index) => `msg-${index}`), ts: transcript.entries.map((entry) => entry.timestamp), groups: groups.map((group, index) => ({ start: groups.slice(0, index).reduce((total, item) => total + item.length, 0), end: groups.slice(0, index + 1).reduce((total, item) => total + item.length, 0) - 1, prompt: group.find((entry) => entry.kind === "user")?.content ?? null, filters: groupFilters[index] })) };
-  return `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/codex-transcripts.css"></head><body><div class="container"><div class="header-row"><h1>Codex transcript</h1><button id="cmdk-trigger" class="cmdk-trigger" type="button"><svg class="cmdk-trigger-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg><span class="cmdk-trigger-label">Search</span><kbd class="cmdk-trigger-kbd">⌘K</kbd></button></div><div class="summary-row">${summaryHtml}${sortHtml}</div>${noticeHtml}<nav id="side-nav" class="side-nav" aria-label="Jump between conversations"></nav><div id="conversations" class="conversations">${summary}</div><aside id="detail-pane" class="detail-pane" aria-hidden="true"><div class="detail-header"><span class="detail-role" id="detail-role"></span><span class="detail-time" id="detail-time"></span><button class="detail-close" id="detail-close">×</button></div><div class="detail-body" id="detail-body"></div></aside><dialog id="cmdk" class="cmdk"><div class="cmdk-box"><div class="cmdk-input-row"><input id="cmdk-input" placeholder="Search commands and transcript…"></div><div id="cmdk-list" class="cmdk-list"></div><div class="cmdk-footer"><span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span><span><kbd>↵</kbd> Select</span><span><kbd>Esc</kbd> Close</span></div></div></dialog></div><script>window.__CODEX_TRANSCRIPTS_META__=${JSON.stringify(meta)};window.__CODEX_TRANSCRIPTS__={chunks:{0:${JSON.stringify(items)}}};</script><script src="/codex-transcripts-viewer.js"></script></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/codex-transcripts.css"></head><body><div class="container"><div class="header-row"><h1>Codex transcript</h1><button id="cmdk-trigger" class="cmdk-trigger" type="button"><svg class="cmdk-trigger-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg><span class="cmdk-trigger-label">Search</span><kbd class="cmdk-trigger-kbd">⌘K</kbd></button></div><div class="summary-row">${summaryHtml}${sortHtml}</div>${noticeHtml}<nav id="side-nav" class="side-nav" aria-label="Jump between conversations"></nav><div id="conversations" class="conversations">${summary}</div><footer class="conversation-end" aria-label="End of session">End of session</footer><aside id="detail-pane" class="detail-pane" aria-hidden="true"><div class="detail-header"><span class="detail-role" id="detail-role"></span><span class="detail-time" id="detail-time"></span><button class="detail-close" id="detail-close">×</button></div><div class="detail-body" id="detail-body"></div></aside><dialog id="cmdk" class="cmdk"><div class="cmdk-box"><div class="cmdk-input-row"><input id="cmdk-input" placeholder="Search commands and transcript…"></div><div id="cmdk-list" class="cmdk-list"></div><div class="cmdk-footer"><span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span><span><kbd>↵</kbd> Select</span><span><kbd>Esc</kbd> Close</span></div></div></dialog></div><script>window.__CODEX_TRANSCRIPTS_META__=${JSON.stringify(meta)};window.__CODEX_TRANSCRIPTS__={chunks:{0:${JSON.stringify(items)}}};</script><script src="/codex-transcripts-viewer.js"></script></body></html>`;
 }
 
 type ProviderKey = "codex" | "claude";

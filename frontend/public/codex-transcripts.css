@@ -407,7 +407,10 @@ a.control-btn { text-decoration: none; }
 .usage-activity li code { overflow: hidden; padding: 0; background: transparent; color: var(--text-color); text-overflow: ellipsis; white-space: nowrap; }
 .usage-activity li span { flex: none; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
 .usage-details { padding: 12px 20px; border-top: 1px solid var(--border-subtle); }
+.usage-details, .usage-details summary { -webkit-user-select: none; user-select: none; }
 .usage-details summary { cursor: pointer; color: var(--text-muted); font-size: 0.78rem; }
+.usage-details:focus, .usage-details summary:focus { outline: none; }
+.usage-details summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 4px; }
 .usage-details dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px 20px; margin: 14px 0 2px; }
 .usage-details dl div { min-width: 0; }
 .usage-details dt { color: var(--text-muted); font-size: 0.68rem; }

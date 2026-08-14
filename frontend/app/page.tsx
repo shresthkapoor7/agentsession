@@ -19,6 +19,72 @@ type SessionTab = {
   value: number | "cumulative";
 };
 
+type SessionComparison = {
+  activeMs: number;
+  cachedInput: number;
+  completed: number;
+  endMs: number | null;
+  filename: string;
+  interrupted: number;
+  model: string;
+  output: number;
+  patches: number;
+  reasoning: number;
+  startMs: number | null;
+  tools: number;
+  total: number;
+  input: number;
+};
+
+function validTimestamp(value: string | null) {
+  if (!value) return null;
+  const milliseconds = Date.parse(value);
+  return Number.isFinite(milliseconds) ? milliseconds : null;
+}
+
+function compareSession(transcript: Transcript): SessionComparison {
+  const usage = transcript.usageEvents.reduce<TokenUsage>((total, event) => ({
+    input: total.input + event.input,
+    cachedInput: total.cachedInput + event.cachedInput,
+    cacheWrite: total.cacheWrite + event.cacheWrite,
+    output: total.output + event.output,
+    reasoning: total.reasoning + event.reasoning,
+    total: total.total + event.total,
+  }), { input: 0, cachedInput: 0, cacheWrite: 0, output: 0, reasoning: 0, total: 0 });
+  const completedTurns = transcript.turns.filter((turn) => turn.status === "completed");
+  const timestamps = [
+    ...transcript.entries.map((entry) => validTimestamp(entry.timestamp)),
+    ...transcript.usageEvents.map((event) => validTimestamp(event.ts)),
+    ...transcript.turns.flatMap((turn) => [validTimestamp(turn.startedAt), validTimestamp(turn.completedAt)]),
+  ].filter((timestamp): timestamp is number => timestamp !== null);
+  const settings = new Map<string, number>();
+  for (const context of transcript.turnContexts) {
+    const setting = [context.model, context.effort].filter(Boolean).join(" · ") || "Unavailable";
+    settings.set(setting, (settings.get(setting) ?? 0) + 1);
+  }
+  const model = [...settings.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([setting, count]) => `${setting} (${count})`)
+    .join(" · ") || "Unavailable";
+
+  return {
+    activeMs: completedTurns.reduce((total, turn) => total + (turn.durationMs ?? 0), 0),
+    cachedInput: usage.cachedInput,
+    completed: completedTurns.length,
+    endMs: timestamps.length ? Math.max(...timestamps) : null,
+    filename: transcript.filename,
+    input: usage.input,
+    interrupted: transcript.turns.filter((turn) => turn.status === "interrupted").length,
+    model,
+    output: usage.output,
+    patches: transcript.patchApplyCount,
+    reasoning: usage.reasoning,
+    startMs: timestamps.length ? Math.min(...timestamps) : null,
+    tools: transcript.entries.filter((entry) => entry.kind === "tool").length,
+    total: usage.total,
+  };
+}
+
 function groupConversation(entries: TranscriptEntry[]) {
   const groups: TranscriptEntry[][] = [];
   let current: TranscriptEntry[] = [];
@@ -80,7 +146,7 @@ function viewerMessageHtml(entry: TranscriptEntry, index: number) {
   return `<div class="message ${messageClass}" id="${id}"><div class="message-content">${body}</div><div class="message-meta"><span class="role-label">${escapeHtml(entry.label)}</span><a href="#${id}" class="timestamp-link"><time datetime="${entry.timestamp}">${entry.timestamp}</time></a></div></div>`;
 }
 
-function viewerDocument(transcript: Transcript, { sessionCount = 1, sessionTabs = [], summaryOnly = false }: { sessionCount?: number; sessionTabs?: SessionTab[]; summaryOnly?: boolean } = {}) {
+function viewerDocument(transcript: Transcript, { sessionCount = 1, sessionTabs = [], sourceSessions = [], summaryOnly = false }: { sessionCount?: number; sessionTabs?: SessionTab[]; sourceSessions?: Transcript[]; summaryOnly?: boolean } = {}) {
   const assistantName = transcript.provider === "claude" ? "Claude" : "Codex";
   const groups = summaryOnly ? [] : groupConversation(transcript.entries);
   const groupDurations = groups.map((group) => {
@@ -210,7 +276,34 @@ function viewerDocument(transcript: Transcript, { sessionCount = 1, sessionTabs 
   const settingsHtml = [...settings.entries()].map(([setting, count]) => `<li><code>${escapeHtml(setting)}</code><span>${count} turn${count === 1 ? "" : "s"}</span></li>`).join("") || "<li>Unavailable</li>";
   const topTools = [...toolCounts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([name, count]) => `${count} ${escapeHtml(name)}`).join(" · ") || "No tool calls";
   const modelName = transcript.turnContexts.find((context) => context.model)?.model ?? "Model unavailable";
-  const dashboardHtml = `<section class="usage-dashboard" aria-labelledby="usage-heading"><div class="usage-header"><div><p class="usage-eyebrow">Local session telemetry</p><h2 id="usage-heading">Session usage</h2><p>${escapeHtml(modelName)} · ${transcript.usageEvents.length} usage updates${transcript.provider === "codex" ? " · cumulative deltas are summed." : " · model-request totals are summed."}</p></div><span class="usage-status">${completedTurns.length} completed${interruptedTurns.length ? ` · ${interruptedTurns.length} interrupted` : ""}</span></div><div class="usage-metrics">${metric("Processed tokens", tokenLabel(usage.total), `${tokenLabel(usage.input)} input across updates`)}${metric("Cached input", tokenLabel(usage.cachedInput), `${usage.input ? ((usage.cachedInput / usage.input) * 100).toFixed(1) : "0.0"}% of observed input`)}${metric("Generated", tokenLabel(usage.output), `Includes ${tokenLabel(usage.reasoning)} reasoning`)}${metric("Active task time", durationLabel(activeMs), `${durationLabel(elapsedMs)} elapsed session time`)}</div><div class="usage-detail-grid"><figure class="usage-chart"><figcaption><div><p class="usage-eyebrow">Completed tasks</p><h3>Processed-token activity</h3></div><span>Peak task: ${tokenLabel(peakTurn)}</span></figcaption><div class="usage-bars" role="img" aria-label="Processed token totals by completed task">${bars}</div><p>Scroll to inspect each completed task. Each bar sums ${transcript.provider === "codex" ? "cumulative-usage deltas" : "model-request totals"} recorded within that task.</p></figure><section class="usage-activity" aria-label="Session activity"><div><p class="usage-eyebrow">Activity</p><h3>${[...toolCounts.values()].reduce((sum, count) => sum + count, 0)} tool calls · ${transcript.patchApplyCount} patches</h3><p>${topTools}</p></div><div><p class="usage-eyebrow">Model settings</p><ul>${settingsHtml}</ul></div></section></div><details class="usage-details"><summary>Session details</summary><dl><div><dt>Working directory</dt><dd>${escapeHtml(transcript.cwd ?? "Unavailable")}</dd></div><div><dt>Source</dt><dd>${escapeHtml([transcript.session.originator, transcript.session.source].filter(Boolean).join(" · ") || "Unavailable")}</dd></div><div><dt>CLI version</dt><dd>${escapeHtml(transcript.session.cliVersion ?? "Unavailable")}</dd></div><div><dt>Git revision</dt><dd>${escapeHtml([transcript.session.gitBranch, transcript.session.gitCommit?.slice(0, 12)].filter(Boolean).join(" · ") || "Unavailable")}</dd></div></dl></details></section>`;
+  const sessionComparisons = summaryOnly ? sourceSessions.map(compareSession) : [];
+  const comparisonHtml = sessionComparisons.length > 1 ? (() => {
+    const totalProcessed = sessionComparisons.reduce((total, session) => total + session.total, 0);
+    const timelineStarts = sessionComparisons.flatMap((session) => session.startMs === null ? [] : [session.startMs]);
+    const timelineEnds = sessionComparisons.flatMap((session) => session.endMs === null ? [] : [session.endMs]);
+    const timelineStart = timelineStarts.length ? Math.min(...timelineStarts) : 0;
+    const timelineEnd = timelineEnds.length ? Math.max(...timelineEnds) : timelineStart;
+    const timelineSpan = Math.max(1, timelineEnd - timelineStart);
+    const dateLabel = (milliseconds: number | null) => milliseconds === null ? "Unavailable" : new Intl.DateTimeFormat(undefined, { day: "numeric", hour: "numeric", minute: "2-digit", month: "short" }).format(milliseconds);
+    const rows = sessionComparisons.map((session, index) => {
+      const share = totalProcessed ? `${((session.total / totalProcessed) * 100).toFixed(1)}%` : "0.0%";
+      const perTask = session.completed ? tokenLabel(Math.round(session.total / session.completed)) : "0";
+      const cacheRate = session.input ? `${((session.cachedInput / session.input) * 100).toFixed(1)}%` : "0.0%";
+      const taskLabel = `${session.completed} completed${session.interrupted ? ` · ${session.interrupted} interrupted` : ""}`;
+      return `<tr><th scope="row"><span>Session ${index + 1}</span><small title="${escapeHtml(session.filename)}">${escapeHtml(session.filename)}</small></th><td><strong>${tokenLabel(session.total)}</strong><small>${share} · ${perTask}/task</small></td><td><strong>${cacheRate}</strong><small>${tokenLabel(Math.max(0, session.input - session.cachedInput))} uncached</small></td><td><strong>${tokenLabel(session.output)}</strong><small>${tokenLabel(session.reasoning)} reasoning</small></td><td><strong>${taskLabel}</strong></td><td><strong>${durationLabel(session.activeMs)}</strong></td><td><strong>${session.tools} tools · ${session.patches} patches</strong></td><td><code title="${escapeHtml(session.model)}">${escapeHtml(session.model)}</code></td></tr>`;
+    }).join("");
+    const timelineRows = sessionComparisons.map((session, index) => {
+      if (session.startMs === null || session.endMs === null) {
+        return `<li><span class="session-timeline-name">Session ${index + 1}</span><span class="session-timeline-track"></span><time>No reliable timestamp range</time></li>`;
+      }
+      const left = ((session.startMs - timelineStart) / timelineSpan) * 100;
+      const width = Math.max(1.2, ((session.endMs - session.startMs) / timelineSpan) * 100);
+      const range = `${dateLabel(session.startMs)} – ${dateLabel(session.endMs)}`;
+      return `<li><span class="session-timeline-name">Session ${index + 1}</span><span class="session-timeline-track" title="${escapeHtml(range)}"><i style="left:${left}%;width:${width}%"></i></span><time>${escapeHtml(range)}</time></li>`;
+    }).join("");
+    return `<section class="session-comparison" aria-labelledby="comparison-heading"><header><div><p class="usage-eyebrow">Source sessions</p><h3 id="comparison-heading">Session comparison</h3></div><span>${sessionComparisons.length} local sessions</span></header><div class="session-comparison-table-wrap"><table><thead><tr><th>Session</th><th>Processed</th><th>Cache</th><th>Generated</th><th>Tasks</th><th>Active</th><th>Activity</th><th>Model settings</th></tr></thead><tbody>${rows}</tbody></table></div><section class="session-timeline" aria-label="Session time spans"><header><span>Overall time span</span><span>${escapeHtml(dateLabel(timelineStart))} – ${escapeHtml(dateLabel(timelineEnd))}</span></header><ol>${timelineRows}</ol></section></section>`;
+  })() : "";
+  const dashboardHtml = `<section class="usage-dashboard" aria-labelledby="usage-heading"><div class="usage-header"><div><p class="usage-eyebrow">Local session telemetry</p><h2 id="usage-heading">Session usage</h2><p>${escapeHtml(modelName)} · ${transcript.usageEvents.length} usage updates${transcript.provider === "codex" ? " · cumulative deltas are summed." : " · model-request totals are summed."}</p></div><span class="usage-status">${completedTurns.length} completed${interruptedTurns.length ? ` · ${interruptedTurns.length} interrupted` : ""}</span></div><div class="usage-metrics">${metric("Processed tokens", tokenLabel(usage.total), `${tokenLabel(usage.input)} input across updates`)}${metric("Cached input", tokenLabel(usage.cachedInput), `${usage.input ? ((usage.cachedInput / usage.input) * 100).toFixed(1) : "0.0"}% of observed input`)}${metric("Generated", tokenLabel(usage.output), `Includes ${tokenLabel(usage.reasoning)} reasoning`)}${metric("Active task time", durationLabel(activeMs), `${durationLabel(elapsedMs)} ${summaryOnly ? "overall time span" : "elapsed session time"}`)}</div>${comparisonHtml}<div class="usage-detail-grid"><figure class="usage-chart"><figcaption><div><p class="usage-eyebrow">Completed tasks</p><h3>Processed-token activity</h3></div><span>Peak task: ${tokenLabel(peakTurn)}</span></figcaption><div class="usage-bars" role="img" aria-label="Processed token totals by completed task">${bars}</div><p>Scroll to inspect each completed task. Each bar sums ${transcript.provider === "codex" ? "cumulative-usage deltas" : "model-request totals"} recorded within that task.</p></figure><section class="usage-activity" aria-label="Session activity"><div><p class="usage-eyebrow">Activity</p><h3>${[...toolCounts.values()].reduce((sum, count) => sum + count, 0)} tool calls · ${transcript.patchApplyCount} patches</h3><p>${topTools}</p></div><div><p class="usage-eyebrow">Model settings</p><ul>${settingsHtml}</ul></div></section></div><details class="usage-details"><summary>Session details</summary><dl><div><dt>Working directory</dt><dd>${escapeHtml(transcript.cwd ?? "Unavailable")}</dd></div><div><dt>Source</dt><dd>${escapeHtml([transcript.session.originator, transcript.session.source].filter(Boolean).join(" · ") || "Unavailable")}</dd></div><div><dt>CLI version</dt><dd>${escapeHtml(transcript.session.cliVersion ?? "Unavailable")}</dd></div><div><dt>Git revision</dt><dd>${escapeHtml([transcript.session.gitBranch, transcript.session.gitCommit?.slice(0, 12)].filter(Boolean).join(" · ") || "Unavailable")}</dd></div></dl></details></section>`;
   const summaryHtml =
     dashboardHtml + `<div class="viewer-summary">` +
     stat(`<b>${summaryOnly ? sessionCount : groups.length}</b> ${summaryOnly ? "sessions" : "conversations"}`) +
@@ -350,6 +443,7 @@ export default function Home() {
     }} ref={transcriptFrame} srcDoc={viewerDocument(currentTranscript, {
       sessionCount: transcripts.length,
       sessionTabs: showTabs ? [{ active: cumulative, label: `Cumulative (${transcripts.length})`, value: "cumulative" }, ...transcripts.map((item, index) => ({ active: !cumulative && activeTab === index, label: item.filename, value: index }))] : [],
+      sourceSessions: cumulative ? transcripts : [],
       summaryOnly: cumulative,
     })} tabIndex={0} title={cumulative ? "Cumulative Codex usage" : `${currentTranscript.provider === "claude" ? "Claude" : "Codex"} transcript`} />{fallbackFileInput}</>;
     /*

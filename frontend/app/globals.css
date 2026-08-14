@@ -323,7 +323,7 @@ code {
 }
 
 .empty-state { color: var(--muted); }
-.codex-transcript-frame { width: 100%; min-height: 100dvh; border: 0; }
+.codex-transcript-frame { display: block; width: 100%; min-height: 100dvh; border: 0; background: #000106; }
 .agentsession-shell { display: grid; min-height: 100dvh; place-items: center; padding: 24px; background: #0d0d0f; color: #e6e6e8; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; -webkit-font-smoothing: antialiased; }
 .agentsession-card { width: min(100%, 460px); padding: 28px; border: 1px solid #232327; border-radius: 16px; background: #161618; }
 .agentsession-brand { display: flex; gap: 9px; align-items: center; color: #c7c7cc; font-size: .92rem; font-weight: 600; letter-spacing: -.01em; }

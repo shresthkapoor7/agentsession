@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createTranscriptExport, parseCodexRollout } from "../lib/codex-rollout.ts";
+import { createCumulativeCodexSession } from "../lib/cumulative-session.ts";
 
 function rollout(...records: object[]) {
   return records.map((record) => JSON.stringify(record)).join("\n");
@@ -100,4 +101,24 @@ test("exports a versioned normalized transcript with format-change counts", () =
   assert.equal(exported.filename, "rollout.agentsession.json");
   assert.equal(payload.format, "agentsession.transcript.v1");
   assert.deepEqual(payload.transcript.systemEvent, { new_event: 1 });
+});
+
+test("combines Codex session metrics without merging their identities", () => {
+  const first = parseCodexRollout(rollout(
+    { timestamp: "2026-08-01T00:00:00Z", type: "session_meta", payload: { id: "session-1" } },
+    event("2026-08-01T00:00:01Z", { type: "token_count", info: { last_token_usage: { input_tokens: 40, output_tokens: 7, total_tokens: 47 } } }),
+    event("2026-08-01T00:00:02Z", { type: "patch_apply_end" }),
+  ), "first.jsonl");
+  const second = parseCodexRollout(rollout(
+    { timestamp: "2026-08-02T00:00:00Z", type: "session_meta", payload: { id: "session-2" } },
+    event("2026-08-02T00:00:01Z", { type: "token_count", info: { last_token_usage: { input_tokens: 10, output_tokens: 3, total_tokens: 13 } } }),
+    event("2026-08-02T00:00:02Z", { type: "patch_apply_end" }),
+  ), "second.jsonl");
+
+  const cumulative = createCumulativeCodexSession([second, first]);
+
+  assert.equal(cumulative.provider, "codex");
+  assert.equal(cumulative.session.source, "2 local sessions");
+  assert.equal(cumulative.patchApplyCount, 2);
+  assert.deepEqual(cumulative.usageEvents.map((event) => event.total), [47, 13]);
 });

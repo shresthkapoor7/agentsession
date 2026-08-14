@@ -1,8 +1,9 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { parseCodexRollout, type TokenUsage, type Transcript, type TranscriptEntry } from "@/lib/codex-rollout";
 import { parseClaudeSession } from "@/lib/claude-session";
+import { createCumulativeCodexSession } from "@/lib/cumulative-session";
 
 type FilePickerHandle = { getFile: () => Promise<File>; name: string };
 type FilePickerWindow = Window & {
@@ -10,6 +11,12 @@ type FilePickerWindow = Window & {
     multiple?: boolean;
     types?: Array<{ description: string; accept: Record<string, string[]> }>;
   }) => Promise<FilePickerHandle[]>;
+};
+
+type SessionTab = {
+  active: boolean;
+  label: string;
+  value: number | "cumulative";
 };
 
 function groupConversation(entries: TranscriptEntry[]) {
@@ -73,9 +80,9 @@ function viewerMessageHtml(entry: TranscriptEntry, index: number) {
   return `<div class="message ${messageClass}" id="${id}"><div class="message-content">${body}</div><div class="message-meta"><span class="role-label">${escapeHtml(entry.label)}</span><a href="#${id}" class="timestamp-link"><time datetime="${entry.timestamp}">${entry.timestamp}</time></a></div></div>`;
 }
 
-function viewerDocument(transcript: Transcript) {
+function viewerDocument(transcript: Transcript, { sessionCount = 1, sessionTabs = [], summaryOnly = false }: { sessionCount?: number; sessionTabs?: SessionTab[]; summaryOnly?: boolean } = {}) {
   const assistantName = transcript.provider === "claude" ? "Claude" : "Codex";
-  const groups = groupConversation(transcript.entries);
+  const groups = summaryOnly ? [] : groupConversation(transcript.entries);
   const groupDurations = groups.map((group) => {
     const start = Date.parse(group[0].timestamp);
     const end = Date.parse(group[group.length - 1].timestamp);
@@ -124,7 +131,7 @@ function viewerDocument(transcript: Transcript) {
   const avgMs = taskDurations.length ? Math.floor(taskDurations.reduce((total, value) => total + value, 0) / taskDurations.length) : 0;
   const minMs = taskDurations.length ? Math.min(...taskDurations) : 0;
   const maxMs = taskDurations.length ? Math.max(...taskDurations) : 0;
-  const items = transcript.entries.map(viewerMessageHtml);
+  const items = summaryOnly ? [] : transcript.entries.map(viewerMessageHtml);
   let start = 0;
   const summary = groups.map((group, index) => {
     const end = start + group.length - 1;
@@ -206,8 +213,8 @@ function viewerDocument(transcript: Transcript) {
   const dashboardHtml = `<section class="usage-dashboard" aria-labelledby="usage-heading"><div class="usage-header"><div><p class="usage-eyebrow">Local session telemetry</p><h2 id="usage-heading">Session usage</h2><p>${escapeHtml(modelName)} · ${transcript.usageEvents.length} usage updates${transcript.provider === "codex" ? " · cumulative deltas are summed." : " · model-request totals are summed."}</p></div><span class="usage-status">${completedTurns.length} completed${interruptedTurns.length ? ` · ${interruptedTurns.length} interrupted` : ""}</span></div><div class="usage-metrics">${metric("Processed tokens", tokenLabel(usage.total), `${tokenLabel(usage.input)} input across updates`)}${metric("Cached input", tokenLabel(usage.cachedInput), `${usage.input ? ((usage.cachedInput / usage.input) * 100).toFixed(1) : "0.0"}% of observed input`)}${metric("Generated", tokenLabel(usage.output), `Includes ${tokenLabel(usage.reasoning)} reasoning`)}${metric("Active task time", durationLabel(activeMs), `${durationLabel(elapsedMs)} elapsed session time`)}</div><div class="usage-detail-grid"><figure class="usage-chart"><figcaption><div><p class="usage-eyebrow">Completed tasks</p><h3>Processed-token activity</h3></div><span>Peak update: ${tokenLabel(Math.max(...transcript.usageEvents.map((event) => event.total), 0))}</span></figcaption><div class="usage-bars" role="img" aria-label="Processed token totals by completed task">${bars}</div><p>Each bar sums ${transcript.provider === "codex" ? "cumulative-usage deltas" : "model-request totals"} recorded within that task. This includes input context and generated output.</p></figure><section class="usage-activity" aria-label="Session activity"><div><p class="usage-eyebrow">Activity</p><h3>${[...toolCounts.values()].reduce((sum, count) => sum + count, 0)} tool calls · ${transcript.patchApplyCount} patches</h3><p>${topTools}</p></div><div><p class="usage-eyebrow">Model settings</p><ul>${settingsHtml}</ul></div></section></div><details class="usage-details"><summary>Session details</summary><dl><div><dt>Working directory</dt><dd>${escapeHtml(transcript.cwd ?? "Unavailable")}</dd></div><div><dt>Source</dt><dd>${escapeHtml([transcript.session.originator, transcript.session.source].filter(Boolean).join(" · ") || "Unavailable")}</dd></div><div><dt>CLI version</dt><dd>${escapeHtml(transcript.session.cliVersion ?? "Unavailable")}</dd></div><div><dt>Git revision</dt><dd>${escapeHtml([transcript.session.gitBranch, transcript.session.gitCommit?.slice(0, 12)].filter(Boolean).join(" · ") || "Unavailable")}</dd></div></dl></details></section>`;
   const summaryHtml =
     dashboardHtml + `<div class="viewer-summary">` +
-    stat(`<b>${groups.length}</b> conversations`) +
-    stat(`<b>${items.length}</b> messages`) +
+    stat(`<b>${summaryOnly ? sessionCount : groups.length}</b> ${summaryOnly ? "sessions" : "conversations"}`) +
+    stat(`<b>${summaryOnly ? transcript.entries.length : items.length}</b> messages`) +
     (taskDurations.length
       ? stat(`⏱ avg <b>${durationLabel(avgMs)}</b>`) + stat(`min <b>${durationLabel(minMs)}</b>`) + stat(`max <b>${durationLabel(maxMs)}</b>`)
       : "") +
@@ -217,7 +224,18 @@ function viewerDocument(transcript: Transcript) {
   // chunk files that do not exist.
   const meta = { format: "codex-transcripts.viewer.v3", total: items.length, chunk_size: Math.max(1, items.length), chunks: [""], kinds: transcript.entries.map((entry) => entry.kind[0]).join(""), ids: items.map((_, index) => `msg-${index}`), ts: transcript.entries.map((entry) => entry.timestamp), groups: groups.map((group, index) => ({ start: groups.slice(0, index).reduce((total, item) => total + item.length, 0), end: groups.slice(0, index + 1).reduce((total, item) => total + item.length, 0) - 1, prompt: group.find((entry) => entry.kind === "user")?.content ?? null, filters: groupFilters[index] })) };
   const scriptJson = (value: unknown) => JSON.stringify(value).replace(/</g, "\\u003c");
-  return `<!doctype html><html><head><meta charset="utf-8"><link rel="stylesheet" href="/codex-transcripts.css"></head><body><div class="container"><div class="header-row"><h1>${assistantName} transcript</h1><button id="cmdk-trigger" class="cmdk-trigger" type="button"><svg class="cmdk-trigger-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg><span class="cmdk-trigger-label">Search</span><kbd class="cmdk-trigger-kbd">⌘K</kbd></button></div><div class="summary-row">${summaryHtml}${sortHtml}</div>${noticeHtml}<nav id="side-nav" class="side-nav" aria-label="Jump between conversations"></nav><div id="conversations" class="conversations">${summary}</div><footer class="conversation-end" aria-label="End of session">End of session</footer><aside id="detail-pane" class="detail-pane" aria-hidden="true"><div class="detail-header"><span class="detail-role" id="detail-role"></span><span class="detail-time" id="detail-time"></span><button class="detail-close" id="detail-close">×</button></div><div class="detail-body" id="detail-body"></div></aside><dialog id="cmdk" class="cmdk"><div class="cmdk-box"><div class="cmdk-input-row"><input id="cmdk-input" placeholder="Search commands and transcript…"></div><div id="cmdk-list" class="cmdk-list"></div><div class="cmdk-footer"><span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span><span><kbd>↵</kbd> Select</span><span><kbd>Esc</kbd> Close</span></div></div></dialog></div><script>window.__CODEX_TRANSCRIPTS_META__=${scriptJson(meta)};window.__CODEX_TRANSCRIPTS__={chunks:{0:${scriptJson(items)}}};</script><script src="/codex-transcripts-viewer.js"></script></body></html>`;
+  const sessionSwitcher = sessionTabs.length
+    ? `<nav class="session-switcher" aria-label="Loaded Codex sessions" role="tablist">${sessionTabs.map((tab) => `<button aria-selected="${tab.active}" class="${tab.active ? "active" : ""}" data-session-tab="${tab.value}" role="tab" title="${escapeHtml(tab.label)}" type="button">${escapeHtml(tab.label)}</button>`).join("")}<button class="session-switcher-add" data-session-add type="button">Add sessions</button></nav>`
+    : "";
+  const sessionControlsScript = sessionTabs.length
+    ? `<script>document.querySelectorAll('[data-session-tab]').forEach(function(button){button.addEventListener('click',function(){window.parent.postMessage({source:'agentsession',type:'session-tab',tab:button.getAttribute('data-session-tab')},'*');});});document.querySelector('[data-session-add]').addEventListener('click',function(){window.parent.postMessage({source:'agentsession',type:'session-add'},'*');});</script>`
+    : "";
+  const bodyContent = summaryOnly
+    ? `<section class="cumulative-session-note"><strong>Cumulative session</strong><span>Metrics across ${sessionCount} local Codex sessions. Individual transcripts remain available in their tabs.</span></section>`
+    : `<nav id="side-nav" class="side-nav" aria-label="Jump between conversations"></nav><div id="conversations" class="conversations">${summary}</div><footer class="conversation-end" aria-label="End of session">End of session</footer><aside id="detail-pane" class="detail-pane" aria-hidden="true"><div class="detail-header"><span class="detail-role" id="detail-role"></span><span class="detail-time" id="detail-time"></span><button class="detail-close" id="detail-close">×</button></div><div class="detail-body" id="detail-body"></div></aside><dialog id="cmdk" class="cmdk"><div class="cmdk-box"><div class="cmdk-input-row"><input id="cmdk-input" placeholder="Search commands and transcript…"></div><div id="cmdk-list" class="cmdk-list"></div><div class="cmdk-footer"><span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span><span><kbd>↵</kbd> Select</span><span><kbd>Esc</kbd> Close</span></div></div></dialog>`;
+  const headerControl = summaryOnly ? "" : `<button id="cmdk-trigger" class="cmdk-trigger" type="button"><svg class="cmdk-trigger-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg><span class="cmdk-trigger-label">Search</span><kbd class="cmdk-trigger-kbd">⌘K</kbd></button>`;
+  const title = summaryOnly ? "Cumulative Codex usage" : `${assistantName} transcript`;
+  return `<!doctype html><html><head><meta charset="utf-8"><script>(function(){var theme;try{theme=localStorage.getItem('theme')}catch(e){}if(theme!=='light'&&theme!=='dark'){theme=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'}document.documentElement.setAttribute('data-theme',theme);document.documentElement.style.backgroundColor=theme==='dark'?'#000106':'#FCEFD5'})()</script><link rel="stylesheet" href="/codex-transcripts.css"></head><body><div class="container"><div class="header-row"><h1>${title}</h1>${headerControl}</div>${sessionSwitcher}<div class="summary-row">${summaryHtml}${summaryOnly ? "" : sortHtml}</div>${noticeHtml}${bodyContent}</div><script>window.__CODEX_TRANSCRIPTS_META__=${scriptJson(meta)};window.__CODEX_TRANSCRIPTS__={chunks:{0:${scriptJson(items)}}};</script>${sessionControlsScript}<script src="/codex-transcripts-viewer.js"></script></body></html>`;
 }
 
 type ProviderKey = "codex" | "claude";
@@ -229,30 +247,71 @@ const PROVIDERS: Record<ProviderKey, { label: string; title: string; path: strin
 export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
-  const [transcript, setTranscript] = useState<Transcript | null>(null);
+  const [transcripts, setTranscripts] = useState<Transcript[]>([]);
+  const [activeTab, setActiveTab] = useState<number | "cumulative">(0);
   const [pathCopied, setPathCopied] = useState(false);
   const [provider, setProvider] = useState<ProviderKey>("codex");
   const fallbackInput = useRef<HTMLInputElement>(null);
+  const fallbackAppend = useRef(false);
+  const transcriptFrame = useRef<HTMLIFrameElement>(null);
   const cfg = PROVIDERS[provider];
+
+  useEffect(() => {
+    function handleSessionControl(event: MessageEvent<unknown>) {
+      if (event.source !== transcriptFrame.current?.contentWindow) return;
+      const message = event.data;
+      if (!message || typeof message !== "object") return;
+      const data = message as { source?: unknown; tab?: unknown; type?: unknown };
+      if (data.source !== "agentsession") return;
+      if (data.type === "session-add") {
+        fallbackAppend.current = true;
+        fallbackInput.current?.click();
+        return;
+      }
+      if (data.type !== "session-tab") return;
+      if (data.tab === "cumulative") setActiveTab("cumulative");
+      else if (typeof data.tab === "string" && /^\d+$/.test(data.tab)) {
+        const index = Number(data.tab);
+        if (index < transcripts.length) setActiveTab(index);
+      }
+    }
+    window.addEventListener("message", handleSessionControl);
+    return () => window.removeEventListener("message", handleSessionControl);
+  }, [transcripts.length]);
 
   function copyPath() {
     navigator.clipboard.writeText(cfg.path).then(() => setPathCopied(true)).catch(() => setPathCopied(false));
   }
 
-  async function loadSessionFile(file: File) {
+  async function loadSessionFiles(fileList: FileList | File[], append = false) {
+    const files = Array.from(fileList);
+    if (!files.length) return;
     setIsLoading(true);
     setError(null);
     try {
-      const raw = await file.text();
-      setTranscript(provider === "claude" ? parseClaudeSession(raw, file.name) : parseCodexRollout(raw, file.name));
+      const results = await Promise.all(files.map(async (file) => {
+        try {
+          const raw = await file.text();
+          return { transcript: provider === "claude" ? parseClaudeSession(raw, file.name) : parseCodexRollout(raw, file.name) };
+        } catch (caught) {
+          return { error: `${file.name}: ${caught instanceof Error ? caught.message : "Could not read this transcript."}` };
+        }
+      }));
+      const loaded = results.flatMap((result) => result.transcript ? [result.transcript] : []);
+      const failed = results.flatMap((result) => result.error ? [result.error] : []);
+      if (!loaded.length) throw new Error(failed[0] ?? "Could not read these transcripts.");
+      const next = append ? [...transcripts, ...loaded] : loaded;
+      setTranscripts(next);
+      setActiveTab(provider === "codex" && next.length > 1 ? "cumulative" : 0);
+      if (failed.length) setError(`Loaded ${loaded.length} session${loaded.length === 1 ? "" : "s"}. Skipped ${failed.length}: ${failed.join(" ")}`);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not read this transcript.");
+      setError(caught instanceof Error ? caught.message : "Could not read these transcripts.");
     } finally {
       setIsLoading(false);
     }
   }
 
-  async function openSessionPicker() {
+  async function openSessionPicker(append = false) {
     setError(null);
     try {
       await navigator.clipboard.writeText(cfg.path);
@@ -262,27 +321,37 @@ export default function Home() {
     }
     const picker = (window as FilePickerWindow).showOpenFilePicker;
     if (!picker) {
+      fallbackAppend.current = append;
       fallbackInput.current?.click();
       return;
     }
 
     try {
-      const [handle] = await picker({
-        multiple: false,
+      const handles = await picker({
+        multiple: provider === "codex",
         types: [{ description: provider === "claude" ? "Claude Code session" : "Codex rollout", accept: { "application/json": [".jsonl", ".json"] } }],
       });
-      if (handle) await loadSessionFile(await handle.getFile());
+      await loadSessionFiles(await Promise.all(handles.map((handle) => handle.getFile())), append);
     } catch (caught) {
       if (caught instanceof DOMException && caught.name === "AbortError") return;
       setError("The file picker could not be opened. Please try again.");
     }
   }
 
-  if (transcript) {
-    return <iframe className="codex-transcript-frame" onLoad={(event) => {
+  const fallbackFileInput = <input accept=".jsonl,.json,application/json" className="file-input" multiple={provider === "codex"} onChange={(event) => { const files = event.target.files; if (files?.length) void loadSessionFiles(files, fallbackAppend.current); fallbackAppend.current = false; event.currentTarget.value = ""; }} ref={fallbackInput} type="file" />;
+
+  if (transcripts.length) {
+    const showTabs = provider === "codex" && transcripts.length > 1;
+    const cumulative = showTabs && activeTab === "cumulative";
+    const currentTranscript = cumulative ? createCumulativeCodexSession(transcripts) : transcripts[typeof activeTab === "number" ? activeTab : 0];
+    return <><iframe className="codex-transcript-frame" onLoad={(event) => {
       event.currentTarget.focus({ preventScroll: true });
       event.currentTarget.contentWindow?.focus();
-    }} srcDoc={viewerDocument(transcript)} tabIndex={0} title={`${transcript.provider === "claude" ? "Claude" : "Codex"} transcript`} />;
+    }} ref={transcriptFrame} srcDoc={viewerDocument(currentTranscript, {
+      sessionCount: transcripts.length,
+      sessionTabs: showTabs ? [{ active: cumulative, label: `Cumulative (${transcripts.length})`, value: "cumulative" }, ...transcripts.map((item, index) => ({ active: !cumulative && activeTab === index, label: item.filename, value: index }))] : [],
+      summaryOnly: cumulative,
+    })} tabIndex={0} title={cumulative ? "Cumulative Codex usage" : `${currentTranscript.provider === "claude" ? "Claude" : "Codex"} transcript`} />{fallbackFileInput}</>;
     /*
     const groups = groupConversation(transcript.entries);
     const matches = groups.map((group, index) => ({ group, index })).filter(({ group }) =>
@@ -347,7 +416,7 @@ export default function Home() {
               type="button"
               aria-pressed={provider === key}
               className={provider === key ? "active" : ""}
-              onClick={() => { setProvider(key); setPathCopied(false); setError(null); }}
+              onClick={() => { setProvider(key); setPathCopied(false); setError(null); setTranscripts([]); setActiveTab(0); }}
             >
               {PROVIDERS[key].label}
             </button>
@@ -356,7 +425,7 @@ export default function Home() {
 
         <h1 id="page-title">{cfg.title}</h1>
         <p className="agentsession-sub">
-          Choose a local <code>{cfg.file}</code> file. It’s parsed entirely in your browser — nothing is uploaded.
+          Choose {provider === "codex" ? "one or more" : "a"} local <code>{cfg.file}</code> file{provider === "codex" ? "s" : ""}. It’s parsed entirely in your browser — nothing is uploaded.
         </p>
 
         <div className="path-row">
@@ -367,11 +436,11 @@ export default function Home() {
           Copy the path above. In the file dialog, press <kbd>⌘</kbd> <kbd>Shift</kbd> <kbd>G</kbd>, paste it, hit Return, then pick your file.
         </p>
 
-        <button className="open-session" disabled={isLoading} onClick={openSessionPicker} type="button">
+        <button className="open-session" disabled={isLoading} onClick={() => void openSessionPicker()} type="button">
           {isLoading ? "Reading…" : "Open session"}
         </button>
 
-        <input accept=".jsonl,.json,application/json" className="file-input" onChange={(event) => { const file = event.target.files?.[0]; if (file) void loadSessionFile(file); }} ref={fallbackInput} type="file" />
+        {fallbackFileInput}
         {error ? <p className="error-message" role="alert">{error}</p> : null}
       </section>
     </main>

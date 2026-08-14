@@ -374,8 +374,8 @@ a.control-btn { text-decoration: none; }
 .usage-chart figcaption > span { color: var(--text-muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.68rem; text-align: right; }
 .usage-chart h3, .usage-activity h3 { font-size: 0.9rem; }
 .usage-chart > p, .usage-activity > div > p:not(.usage-eyebrow) { margin: 12px 0 0; color: var(--text-muted); font-size: 0.74rem; line-height: 1.45; }
-.usage-bars { display: flex; align-items: end; gap: 5px; min-height: 118px; margin-top: 20px; padding: 8px 0 2px; border-bottom: 1px solid var(--border); }
-.usage-bar-item { display: grid; flex: 1 1 0; grid-template-rows: auto 76px auto; gap: 4px; min-width: 0; text-align: center; }
+.usage-bars { display: flex; align-items: end; gap: 5px; min-height: 118px; margin-top: 20px; padding: 8px 0 10px; overflow-x: auto; border-bottom: 1px solid var(--border); scrollbar-color: var(--border) transparent; scrollbar-width: thin; }
+.usage-bar-item { display: grid; flex: 0 0 34px; grid-template-rows: auto 76px auto; gap: 4px; min-width: 0; text-align: center; }
 .usage-bar-item > span { color: var(--text-muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.62rem; }
 .usage-bar-item > b { overflow: hidden; color: var(--text-muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.6rem; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .usage-bar-track { position: relative; display: flex; align-items: end; height: 76px; border-radius: 3px 3px 0 0; background: var(--surface-bg); overflow: hidden; }

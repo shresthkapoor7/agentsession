@@ -27,7 +27,10 @@ export function createCumulativeSession(transcripts: Transcript[]): Transcript {
     systemResponse: sumCounts(transcripts, "systemResponse"),
     systemRollout: sumCounts(transcripts, "systemRollout"),
     turns: transcripts.flatMap((transcript, index) => transcript.turns.map((turn) => ({ ...turn, id: `${index}:${turn.id}` }))).sort((a, b) => a.startedAt.localeCompare(b.startedAt)),
-    turnContexts: transcripts.flatMap((transcript) => transcript.turnContexts).sort((a, b) => a.ts.localeCompare(b.ts)),
+    turnContexts: transcripts.flatMap((transcript, index) => transcript.turnContexts.map((context) => ({
+      ...context,
+      turnId: context.turnId == null ? context.turnId : `${index}:${context.turnId}`,
+    }))).sort((a, b) => a.ts.localeCompare(b.ts)),
     usageEvents: transcripts.flatMap((transcript) => transcript.usageEvents).sort((a, b) => a.ts.localeCompare(b.ts)),
   };
 }

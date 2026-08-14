@@ -106,8 +106,11 @@ test("exports a versioned normalized transcript with format-change counts", () =
 test("combines Codex session metrics without merging their identities", () => {
   const first = parseCodexRollout(rollout(
     { timestamp: "2026-08-01T00:00:00Z", type: "session_meta", payload: { id: "session-1" } },
+    event("2026-08-01T00:00:01Z", { type: "task_started", turn_id: "turn-a" }),
+    { timestamp: "2026-08-01T00:00:01Z", type: "turn_context", payload: { turn_id: "turn-a", model: "gpt-5.6-terra" } },
     event("2026-08-01T00:00:01Z", { type: "token_count", info: { last_token_usage: { input_tokens: 40, output_tokens: 7, total_tokens: 47 } } }),
     event("2026-08-01T00:00:02Z", { type: "patch_apply_end" }),
+    event("2026-08-01T00:00:03Z", { type: "task_complete", turn_id: "turn-a", duration_ms: 2_000 }),
   ), "first.jsonl");
   const second = parseCodexRollout(rollout(
     { timestamp: "2026-08-02T00:00:00Z", type: "session_meta", payload: { id: "session-2" } },
@@ -121,4 +124,6 @@ test("combines Codex session metrics without merging their identities", () => {
   assert.equal(cumulative.session.source, "2 local Codex sessions");
   assert.equal(cumulative.patchApplyCount, 2);
   assert.deepEqual(cumulative.usageEvents.map((event) => event.total), [47, 13]);
+  assert.equal(cumulative.turns.find((turn) => turn.id === "1:turn-a")?.id, "1:turn-a");
+  assert.equal(cumulative.turnContexts.find((context) => context.model === "gpt-5.6-terra")?.turnId, "1:turn-a");
 });

@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { parseCodexRollout, type TokenUsage, type Transcript, type TranscriptEntry } from "@/lib/codex-rollout";
 import { parseClaudeSession } from "@/lib/claude-session";
-import { createCumulativeCodexSession } from "@/lib/cumulative-session";
+import { createCumulativeSession } from "@/lib/cumulative-session";
 
 type FilePickerHandle = { getFile: () => Promise<File>; name: string };
 type FilePickerWindow = Window & {
@@ -318,16 +318,16 @@ function viewerDocument(transcript: Transcript, { sessionCount = 1, sessionTabs 
   const meta = { format: "codex-transcripts.viewer.v3", total: items.length, chunk_size: Math.max(1, items.length), chunks: [""], kinds: transcript.entries.map((entry) => entry.kind[0]).join(""), ids: items.map((_, index) => `msg-${index}`), ts: transcript.entries.map((entry) => entry.timestamp), groups: groups.map((group, index) => ({ start: groups.slice(0, index).reduce((total, item) => total + item.length, 0), end: groups.slice(0, index + 1).reduce((total, item) => total + item.length, 0) - 1, prompt: group.find((entry) => entry.kind === "user")?.content ?? null, filters: groupFilters[index] })) };
   const scriptJson = (value: unknown) => JSON.stringify(value).replace(/</g, "\\u003c");
   const sessionSwitcher = sessionTabs.length
-    ? `<nav class="session-switcher" aria-label="Loaded Codex sessions" role="tablist">${sessionTabs.map((tab) => `<button aria-selected="${tab.active}" class="${tab.active ? "active" : ""}" data-session-tab="${tab.value}" role="tab" title="${escapeHtml(tab.label)}" type="button">${escapeHtml(tab.label)}</button>`).join("")}<button class="session-switcher-add" data-session-add type="button">Add sessions</button></nav>`
+    ? `<nav class="session-switcher" aria-label="Loaded ${assistantName} sessions" role="tablist">${sessionTabs.map((tab) => `<button aria-selected="${tab.active}" class="${tab.active ? "active" : ""}" data-session-tab="${tab.value}" role="tab" title="${escapeHtml(tab.label)}" type="button">${escapeHtml(tab.label)}</button>`).join("")}<button class="session-switcher-add" data-session-add type="button">Add sessions</button></nav>`
     : "";
   const sessionControlsScript = sessionTabs.length
     ? `<script>document.querySelectorAll('[data-session-tab]').forEach(function(button){button.addEventListener('click',function(){window.parent.postMessage({source:'agentsession',type:'session-tab',tab:button.getAttribute('data-session-tab')},'*');});});document.querySelector('[data-session-add]').addEventListener('click',function(){window.parent.postMessage({source:'agentsession',type:'session-add'},'*');});</script>`
     : "";
   const bodyContent = summaryOnly
-    ? `<section class="cumulative-session-note"><strong>Cumulative session</strong><span>Metrics across ${sessionCount} local Codex sessions. Individual transcripts remain available in their tabs.</span></section>`
+    ? `<section class="cumulative-session-note"><strong>Cumulative session</strong><span>Metrics across ${sessionCount} local ${assistantName} sessions. Individual transcripts remain available in their tabs.</span></section>`
     : `<nav id="side-nav" class="side-nav" aria-label="Jump between conversations"></nav><div id="conversations" class="conversations">${summary}</div><footer class="conversation-end" aria-label="End of session">End of session</footer><aside id="detail-pane" class="detail-pane" aria-hidden="true"><div class="detail-header"><span class="detail-role" id="detail-role"></span><span class="detail-time" id="detail-time"></span><button class="detail-close" id="detail-close">×</button></div><div class="detail-body" id="detail-body"></div></aside><dialog id="cmdk" class="cmdk"><div class="cmdk-box"><div class="cmdk-input-row"><input id="cmdk-input" placeholder="Search commands and transcript…"></div><div id="cmdk-list" class="cmdk-list"></div><div class="cmdk-footer"><span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span><span><kbd>↵</kbd> Select</span><span><kbd>Esc</kbd> Close</span></div></div></dialog>`;
   const headerControl = summaryOnly ? "" : `<button id="cmdk-trigger" class="cmdk-trigger" type="button"><svg class="cmdk-trigger-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg><span class="cmdk-trigger-label">Search</span><kbd class="cmdk-trigger-kbd">⌘K</kbd></button>`;
-  const title = summaryOnly ? "Cumulative Codex usage" : `${assistantName} transcript`;
+  const title = summaryOnly ? `Cumulative ${assistantName} usage` : `${assistantName} transcript`;
   return `<!doctype html><html><head><meta charset="utf-8"><script>(function(){var theme;try{theme=localStorage.getItem('theme')}catch(e){}if(theme!=='light'&&theme!=='dark'){theme=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'}document.documentElement.setAttribute('data-theme',theme);document.documentElement.style.backgroundColor=theme==='dark'?'#000106':'#FCEFD5'})()</script><link rel="stylesheet" href="/codex-transcripts.css"></head><body><div class="container"><div class="header-row"><h1>${title}</h1>${headerControl}</div>${sessionSwitcher}<div class="summary-row">${summaryHtml}${summaryOnly ? "" : sortHtml}</div>${noticeHtml}${bodyContent}</div><script>window.__CODEX_TRANSCRIPTS_META__=${scriptJson(meta)};window.__CODEX_TRANSCRIPTS__={chunks:{0:${scriptJson(items)}}};</script>${sessionControlsScript}<script src="/codex-transcripts-viewer.js"></script></body></html>`;
 }
 
@@ -395,7 +395,7 @@ export default function Home() {
       if (!loaded.length) throw new Error(failed[0] ?? "Could not read these transcripts.");
       const next = append ? [...transcripts, ...loaded] : loaded;
       setTranscripts(next);
-      setActiveTab(provider === "codex" && next.length > 1 ? "cumulative" : 0);
+      setActiveTab(next.length > 1 ? "cumulative" : 0);
       if (failed.length) setError(`Loaded ${loaded.length} session${loaded.length === 1 ? "" : "s"}. Skipped ${failed.length}: ${failed.join(" ")}`);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Could not read these transcripts.");
@@ -421,7 +421,7 @@ export default function Home() {
 
     try {
       const handles = await picker({
-        multiple: provider === "codex",
+        multiple: true,
         types: [{ description: provider === "claude" ? "Claude Code session" : "Codex rollout", accept: { "application/json": [".jsonl", ".json"] } }],
       });
       await loadSessionFiles(await Promise.all(handles.map((handle) => handle.getFile())), append);
@@ -431,12 +431,12 @@ export default function Home() {
     }
   }
 
-  const fallbackFileInput = <input accept=".jsonl,.json,application/json" className="file-input" multiple={provider === "codex"} onChange={(event) => { const files = event.target.files; if (files?.length) void loadSessionFiles(files, fallbackAppend.current); fallbackAppend.current = false; event.currentTarget.value = ""; }} ref={fallbackInput} type="file" />;
+  const fallbackFileInput = <input accept=".jsonl,.json,application/json" className="file-input" multiple onChange={(event) => { const files = event.target.files; if (files?.length) void loadSessionFiles(files, fallbackAppend.current); fallbackAppend.current = false; event.currentTarget.value = ""; }} ref={fallbackInput} type="file" />;
 
   if (transcripts.length) {
-    const showTabs = provider === "codex" && transcripts.length > 1;
+    const showTabs = transcripts.length > 1;
     const cumulative = showTabs && activeTab === "cumulative";
-    const currentTranscript = cumulative ? createCumulativeCodexSession(transcripts) : transcripts[typeof activeTab === "number" ? activeTab : 0];
+    const currentTranscript = cumulative ? createCumulativeSession(transcripts) : transcripts[typeof activeTab === "number" ? activeTab : 0];
     return <><iframe className="codex-transcript-frame" onLoad={(event) => {
       event.currentTarget.focus({ preventScroll: true });
       event.currentTarget.contentWindow?.focus();
@@ -445,7 +445,7 @@ export default function Home() {
       sessionTabs: showTabs ? [{ active: cumulative, label: `Cumulative (${transcripts.length})`, value: "cumulative" }, ...transcripts.map((item, index) => ({ active: !cumulative && activeTab === index, label: item.filename, value: index }))] : [],
       sourceSessions: cumulative ? transcripts : [],
       summaryOnly: cumulative,
-    })} tabIndex={0} title={cumulative ? "Cumulative Codex usage" : `${currentTranscript.provider === "claude" ? "Claude" : "Codex"} transcript`} />{fallbackFileInput}</>;
+    })} tabIndex={0} title={cumulative ? `Cumulative ${provider === "claude" ? "Claude" : "Codex"} usage` : `${currentTranscript.provider === "claude" ? "Claude" : "Codex"} transcript`} />{fallbackFileInput}</>;
     /*
     const groups = groupConversation(transcript.entries);
     const matches = groups.map((group, index) => ({ group, index })).filter(({ group }) =>
@@ -519,7 +519,7 @@ export default function Home() {
 
         <h1 id="page-title">{cfg.title}</h1>
         <p className="agentsession-sub">
-          Choose {provider === "codex" ? "one or more" : "a"} local <code>{cfg.file}</code> file{provider === "codex" ? "s" : ""}. It’s parsed entirely in your browser — nothing is uploaded.
+          Choose one or more local <code>{cfg.file}</code> files. They’re parsed entirely in your browser — nothing is uploaded.
         </p>
 
         <div className="path-row">

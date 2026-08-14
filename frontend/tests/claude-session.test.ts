@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { parseClaudeSession } from "../lib/claude-session.ts";
+import { createCumulativeSession } from "../lib/cumulative-session.ts";
 
 function session(...records: object[]) {
   return records.map((record) => JSON.stringify(record)).join("\n");
@@ -98,4 +99,22 @@ test("skips Claude records with invalid timestamps", () => {
 
   assert.deepEqual(transcript.entries.map((entry) => entry.content), ["Keep this"]);
   assert.deepEqual(transcript.systemRollout, { "user:invalid-timestamp": 1 });
+});
+
+test("combines multiple Claude sessions without changing their provider", () => {
+  const first = parseClaudeSession(session(
+    { type: "user", timestamp: "2026-08-01T00:00:00Z", sessionId: "claude-1", uuid: "prompt-1", message: { role: "user", content: "First" } },
+    { type: "assistant", timestamp: "2026-08-01T00:00:01Z", sessionId: "claude-1", message: { id: "message-1", role: "assistant", model: "claude-opus-4-8", usage: { input_tokens: 10, output_tokens: 2 }, content: [{ type: "text", text: "Done" }] } },
+  ), "first.jsonl");
+  const second = parseClaudeSession(session(
+    { type: "user", timestamp: "2026-08-02T00:00:00Z", sessionId: "claude-2", uuid: "prompt-2", message: { role: "user", content: "Second" } },
+    { type: "assistant", timestamp: "2026-08-02T00:00:01Z", sessionId: "claude-2", message: { id: "message-2", role: "assistant", model: "claude-sonnet-5", usage: { input_tokens: 20, output_tokens: 3 }, content: [{ type: "text", text: "Done" }] } },
+  ), "second.jsonl");
+
+  const cumulative = createCumulativeSession([first, second]);
+
+  assert.equal(cumulative.provider, "claude");
+  assert.equal(cumulative.filename, "Cumulative Claude sessions");
+  assert.equal(cumulative.session.source, "2 local Claude sessions");
+  assert.deepEqual(cumulative.usageEvents.map((event) => event.total), [12, 23]);
 });

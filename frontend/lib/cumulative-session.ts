@@ -8,19 +8,21 @@ function sumCounts(transcripts: Transcript[], field: "systemEvent" | "systemResp
   return counts;
 }
 
-export function createCumulativeCodexSession(transcripts: Transcript[]): Transcript {
-  if (!transcripts.length || transcripts.some((transcript) => transcript.provider !== "codex")) {
-    throw new Error("A cumulative Codex session requires one or more Codex transcripts.");
+export function createCumulativeSession(transcripts: Transcript[]): Transcript {
+  const provider = transcripts[0]?.provider;
+  if (!provider || transcripts.some((transcript) => transcript.provider !== provider)) {
+    throw new Error("A cumulative session requires one or more transcripts from the same provider.");
   }
+  const providerName = provider === "claude" ? "Claude" : "Codex";
 
   return {
     cwd: null,
     entries: transcripts.flatMap((transcript) => transcript.entries),
-    filename: "Cumulative Codex sessions",
+    filename: `Cumulative ${providerName} sessions`,
     id: null,
     patchApplyCount: transcripts.reduce((total, transcript) => total + transcript.patchApplyCount, 0),
-    provider: "codex",
-    session: { cliVersion: null, gitBranch: null, gitCommit: null, originator: "Cumulative Codex sessions", source: `${transcripts.length} local sessions` },
+    provider,
+    session: { cliVersion: null, gitBranch: null, gitCommit: null, originator: `Cumulative ${providerName} sessions`, source: `${transcripts.length} local ${providerName} sessions` },
     systemEvent: sumCounts(transcripts, "systemEvent"),
     systemResponse: sumCounts(transcripts, "systemResponse"),
     systemRollout: sumCounts(transcripts, "systemRollout"),

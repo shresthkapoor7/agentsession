@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { createTranscriptExport, parseCodexRollout } from "../lib/codex-rollout.ts";
-import { createCumulativeCodexSession } from "../lib/cumulative-session.ts";
+import { createCumulativeSession } from "../lib/cumulative-session.ts";
 
 function rollout(...records: object[]) {
   return records.map((record) => JSON.stringify(record)).join("\n");
@@ -115,10 +115,10 @@ test("combines Codex session metrics without merging their identities", () => {
     event("2026-08-02T00:00:02Z", { type: "patch_apply_end" }),
   ), "second.jsonl");
 
-  const cumulative = createCumulativeCodexSession([second, first]);
+  const cumulative = createCumulativeSession([second, first]);
 
   assert.equal(cumulative.provider, "codex");
-  assert.equal(cumulative.session.source, "2 local sessions");
+  assert.equal(cumulative.session.source, "2 local Codex sessions");
   assert.equal(cumulative.patchApplyCount, 2);
   assert.deepEqual(cumulative.usageEvents.map((event) => event.total), [47, 13]);
 });

@@ -397,11 +397,13 @@ a.control-btn { text-decoration: none; }
 .usage-chart > p, .usage-activity > div > p:not(.usage-eyebrow) { margin: 12px 0 0; color: var(--text-muted); font-size: 0.74rem; line-height: 1.45; }
 .usage-bars { display: flex; align-items: end; gap: 5px; min-height: 118px; margin-top: 20px; padding: 8px 0 10px; overflow-x: auto; border-bottom: 1px solid var(--border); scrollbar-color: var(--border) transparent; scrollbar-width: thin; }
 .usage-bar-item { display: grid; flex: 0 0 34px; grid-template-rows: auto 76px auto; gap: 4px; min-width: 0; text-align: center; }
+button.usage-bar-item { padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; font: inherit; }
 .usage-bar-item > span { color: var(--text-muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.62rem; }
 .usage-bar-item > b { overflow: hidden; color: var(--text-muted); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 0.6rem; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
 .usage-bar-track { position: relative; display: flex; align-items: end; height: 76px; border-radius: 3px 3px 0 0; background: var(--surface-bg); overflow: hidden; }
 .usage-bar { width: 100%; background: var(--accent); opacity: 0.82; transition: opacity 0.15s ease; }
-.usage-bar:hover { opacity: 1; }
+.usage-bar-jump:hover .usage-bar, .usage-bar-jump:focus-visible .usage-bar { opacity: 1; }
+.usage-bar-jump:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
 .usage-activity { display: grid; align-content: start; gap: 20px; }
 .usage-activity ul { display: grid; gap: 7px; margin: 8px 0 0; padding: 0; list-style: none; }
 .usage-activity li { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; color: var(--text-muted); font-size: 0.7rem; }

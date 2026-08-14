@@ -830,6 +830,19 @@
     CT.openConversation = openConversation;
   }
 
+  function setupUsageBarJumps() {
+    document.addEventListener('click', function(e) {
+      if (!e.target || !e.target.closest) return;
+      var bar = e.target.closest('[data-usage-group-index]');
+      if (!bar) return;
+      var gidx = parseInt(bar.getAttribute('data-usage-group-index') || '', 10);
+      if (!Number.isFinite(gidx)) return;
+      var card = getConversationEl(gidx);
+      if (card) card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      openConversation(gidx);
+    });
+  }
+
   function init() {
     if (!meta || !meta.total) return;
 
@@ -839,6 +852,7 @@
     buildSideNav();
     setupSort();
     setupDetailPane();
+    setupUsageBarJumps();
     setupCommandPalette();
     setupKeyboard();
 

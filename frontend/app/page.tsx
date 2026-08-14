@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { parseCodexRollout, type TokenUsage, type Transcript, type TranscriptEntry } from "@/lib/codex-rollout";
 import { parseClaudeSession } from "@/lib/claude-session";
-import { createCumulativeSession } from "@/lib/cumulative-session";
+import { createSessionView, type SessionTab } from "@/lib/session-tabs";
 
 type FilePickerHandle = { getFile: () => Promise<File>; name: string };
 type FilePickerWindow = Window & {
@@ -11,12 +11,6 @@ type FilePickerWindow = Window & {
     multiple?: boolean;
     types?: Array<{ description: string; accept: Record<string, string[]> }>;
   }) => Promise<FilePickerHandle[]>;
-};
-
-type SessionTab = {
-  active: boolean;
-  label: string;
-  value: number | "cumulative";
 };
 
 type SessionComparison = {
@@ -445,16 +439,15 @@ export default function Home() {
 
   const fallbackFileInput = <input accept=".jsonl,.json,application/json" className="file-input" multiple onChange={(event) => { const files = event.target.files; if (files?.length) void loadSessionFiles(files, fallbackAppend.current); fallbackAppend.current = false; event.currentTarget.value = ""; }} ref={fallbackInput} type="file" />;
 
-  if (transcripts.length) {
-    const showTabs = transcripts.length > 1;
-    const cumulative = showTabs && activeTab === "cumulative";
-    const currentTranscript = cumulative ? createCumulativeSession(transcripts) : transcripts[typeof activeTab === "number" ? activeTab : 0];
+  const sessionView = createSessionView(transcripts, activeTab);
+  if (sessionView) {
+    const { cumulative, currentTranscript, sessionTabs } = sessionView;
     return <><iframe className="codex-transcript-frame" onLoad={(event) => {
       event.currentTarget.focus({ preventScroll: true });
       event.currentTarget.contentWindow?.focus();
     }} ref={transcriptFrame} srcDoc={viewerDocument(currentTranscript, {
       sessionCount: transcripts.length,
-      sessionTabs: showTabs ? [{ active: cumulative, label: `Cumulative (${transcripts.length})`, value: "cumulative" }, ...transcripts.map((item, index) => ({ active: !cumulative && activeTab === index, label: item.filename, value: index }))] : [],
+      sessionTabs,
       sourceSessions: cumulative ? transcripts : [],
       summaryOnly: cumulative,
     })} tabIndex={0} title={cumulative ? `Cumulative ${provider === "claude" ? "Claude" : "Codex"} usage` : `${currentTranscript.provider === "claude" ? "Claude" : "Codex"} transcript`} />{fallbackFileInput}</>;

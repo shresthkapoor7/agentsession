@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     capability_hash_pepper: SecretStr = SecretStr("")
     internal_cleanup_token: SecretStr = SecretStr("")
     frontend_public_url: str = "http://localhost:3000"
+    backend_public_url: str = "http://localhost:8000"
     trusted_proxy_hops: int = Field(default=1, ge=0, le=5)
     daily_upload_bytes_per_ip: int = Field(default=100 * 1024 * 1024, ge=25 * 1024 * 1024)
     cors_origins: str = Field(
@@ -44,6 +45,10 @@ class Settings(BaseSettings):
     @property
     def frontend_base_url(self) -> str:
         return self.frontend_public_url.rstrip("/")
+
+    @property
+    def backend_base_url(self) -> str:
+        return self.backend_public_url.rstrip("/")
 
 
 @lru_cache

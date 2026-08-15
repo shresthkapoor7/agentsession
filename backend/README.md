@@ -41,3 +41,13 @@ Public retrieval uses `GET /v1/shares/{view_token}`. Password shares use
 `POST /v1/shares/{view_token}/unlock`. Revocation uses
 `POST /v1/manage/{manage_token}/revoke`, and the Railway cron calls
 `POST /v1/internal/cleanup-expired` with `X-Internal-Token`.
+
+## Railway services
+
+Use `backend/` as the root directory for the web service; `railway.json` supplies
+its start command and health check. Create a second Railway service from the same
+directory for cleanup, set its start command to
+`uv run python -m app.cleanup_job`, and schedule it hourly. Both services need the
+same `INTERNAL_CLEANUP_TOKEN`; the cleanup service also needs the web service's
+`BACKEND_PUBLIC_URL`. Only the web service needs the Supabase service-role key
+and capability pepper.

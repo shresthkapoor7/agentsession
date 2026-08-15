@@ -353,6 +353,7 @@ export default function Home() {
   const [pathCopied, setPathCopied] = useState(false);
   const [provider, setProvider] = useState<ProviderKey>("codex");
   const [publishError, setPublishError] = useState<string | null>(null);
+  const [publishLinkCopied, setPublishLinkCopied] = useState(false);
   const [publishName, setPublishName] = useState("");
   const [publishOpen, setPublishOpen] = useState(false);
   const [publishPassword, setPublishPassword] = useState("");
@@ -363,6 +364,7 @@ export default function Home() {
   const fallbackAppend = useRef(false);
   const transcriptFrame = useRef<HTMLIFrameElement>(null);
   const cfg = PROVIDERS[provider];
+  const publishReady = Boolean(publishName.trim()) && (publishVisibility !== "password" || publishPassword.length >= 8);
 
   useEffect(() => {
     function handleSessionControl(event: MessageEvent<unknown>) {
@@ -378,6 +380,7 @@ export default function Home() {
       }
       if (data.type === "session-publish") {
         setPublishError(null);
+        setPublishLinkCopied(false);
         setPublishResult(null);
         setPublishOpen(true);
         return;
@@ -401,12 +404,15 @@ export default function Home() {
     if (publishStatus === "publishing") return;
     setPublishOpen(false);
     setPublishError(null);
+    setPublishLinkCopied(false);
   }
 
   async function copyPublishedLink() {
     if (!publishResult) return;
     try {
       await navigator.clipboard.writeText(publishResult.share_url);
+      setPublishLinkCopied(true);
+      window.setTimeout(() => setPublishLinkCopied(false), 1800);
     } catch {
       setPublishError("Could not copy the link. Copy it from the field instead.");
     }
@@ -498,7 +504,7 @@ export default function Home() {
       sessionTabs,
       sourceSessions: cumulative ? transcripts : [],
       summaryOnly: cumulative,
-    })} tabIndex={0} title={cumulative ? `Cumulative ${provider === "claude" ? "Claude" : "Codex"} usage` : `${currentTranscript.provider === "claude" ? "Claude" : "Codex"} transcript`} />{fallbackFileInput}{publishOpen ? <div aria-modal="true" className="publish-overlay" onMouseDown={closePublish} role="dialog" aria-labelledby="publish-title"><section className="publish-dialog" onMouseDown={(event) => event.stopPropagation()}><header><div><p>Encrypted share</p><h2 id="publish-title">Publish this session</h2></div><button aria-label="Close publish dialog" disabled={publishStatus === "publishing"} onClick={closePublish} type="button">×</button></header>{publishResult ? <div className="publish-success"><h3>Share ready</h3><p>This link expires in 21 days. Save the management link below if you may need to revoke it.</p><label>Share link<input readOnly value={publishResult.share_url} /></label><button className="publish-primary" onClick={() => void copyPublishedLink()} type="button">Copy share link</button><label>Management link<input readOnly value={publishResult.manage_url} /></label><p className="publish-muted">The encryption key stays in the share link fragment and is not sent to the server.</p></div> : <form onSubmit={(event) => void submitPublish(event)}><p className="publish-warning">Your transcript can contain messages, tool input, local paths, project details, and secrets. Review the loaded session before publishing.</p><label>Your name<input autoComplete="name" autoFocus maxLength={80} onChange={(event) => setPublishName(event.target.value)} placeholder="Name shown on the share" required value={publishName} /></label><fieldset><legend>Access</legend><label className="publish-choice"><input checked={publishVisibility === "public"} name="visibility" onChange={() => setPublishVisibility("public")} type="radio" value="public" /><span><strong>Anyone with the link</strong><small>No password required</small></span></label><label className="publish-choice"><input checked={publishVisibility === "password"} name="visibility" onChange={() => setPublishVisibility("password")} type="radio" value="password" /><span><strong>Password protected</strong><small>Viewers enter a password before opening it</small></span></label></fieldset>{publishVisibility === "password" ? <label>Password<input autoComplete="new-password" minLength={8} onChange={(event) => setPublishPassword(event.target.value)} placeholder="At least 8 characters" required type="password" value={publishPassword} /></label> : null}{publishError ? <p className="publish-error" role="alert">{publishError}</p> : null}<footer><span>Encrypted in your browser · expires in 21 days</span><button className="publish-primary" disabled={publishStatus === "publishing"} type="submit">{publishStatus === "publishing" ? "Publishing…" : "Publish session"}</button></footer></form>}</section></div> : null}</>;
+    })} tabIndex={0} title={cumulative ? `Cumulative ${provider === "claude" ? "Claude" : "Codex"} usage` : `${currentTranscript.provider === "claude" ? "Claude" : "Codex"} transcript`} />{fallbackFileInput}{publishOpen ? <div aria-modal="true" className="publish-overlay" onMouseDown={closePublish} role="dialog" aria-labelledby="publish-title"><section className="publish-dialog" onMouseDown={(event) => event.stopPropagation()}><header><div><p>Encrypted share</p><h2 id="publish-title">Publish this session</h2></div><button aria-label="Close publish dialog" disabled={publishStatus === "publishing"} onClick={closePublish} type="button">×</button></header>{publishResult ? <div className="publish-success"><h3>Share ready</h3><p>This link expires in 21 days. Save the management link below if you may need to revoke it.</p><label>Share link<input readOnly value={publishResult.share_url} /></label><button className="publish-primary" onClick={() => void copyPublishedLink()} type="button">{publishLinkCopied ? "Copied!" : "Copy share link"}</button><label>Management link<input readOnly value={publishResult.manage_url} /></label><p className="publish-muted">The encryption key stays in the share link fragment and is not sent to the server.</p></div> : <form onSubmit={(event) => void submitPublish(event)}><aside className="publish-warning"><strong>Review before publishing</strong><span>Your transcript can contain messages, tool input, local paths, project details, and secrets.</span></aside><label>Your name<input autoComplete="name" autoFocus maxLength={80} onChange={(event) => setPublishName(event.target.value)} placeholder="Name shown on the share" required value={publishName} /></label><fieldset><legend>Access</legend><label className="publish-choice"><input checked={publishVisibility === "public"} name="visibility" onChange={() => setPublishVisibility("public")} type="radio" value="public" /><span><strong>Anyone with the link</strong><small>No password required</small></span></label><label className="publish-choice"><input checked={publishVisibility === "password"} name="visibility" onChange={() => setPublishVisibility("password")} type="radio" value="password" /><span><strong>Password protected</strong><small>Viewers enter a password before opening it</small></span></label></fieldset>{publishVisibility === "password" ? <label>Password<input autoComplete="new-password" minLength={8} onChange={(event) => setPublishPassword(event.target.value)} placeholder="At least 8 characters" required type="password" value={publishPassword} /></label> : null}{publishError ? <p className="publish-error" role="alert">{publishError}</p> : null}<footer><span>Encrypted in your browser · expires in 21 days</span><button className="publish-primary" disabled={publishStatus === "publishing" || !publishReady} type="submit">{publishStatus === "publishing" ? "Publishing…" : "Publish session"}</button></footer></form>}</section></div> : null}</>;
     /*
     const groups = groupConversation(transcript.entries);
     const matches = groups.map((group, index) => ({ group, index })).filter(({ group }) =>

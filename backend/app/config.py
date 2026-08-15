@@ -22,12 +22,12 @@ class Settings(BaseSettings):
 
     capability_hash_pepper: SecretStr = SecretStr("")
     internal_cleanup_token: SecretStr = SecretStr("")
-    frontend_public_url: str = "http://localhost:3000"
+    frontend_public_url: str = "http://localhost:4000"
     backend_public_url: str = "http://localhost:8000"
     trusted_proxy_hops: int = Field(default=1, ge=0, le=5)
     daily_upload_bytes_per_ip: int = Field(default=100 * 1024 * 1024, ge=25 * 1024 * 1024)
     cors_origins: str = Field(
-        default="http://localhost:3000,http://127.0.0.1:3000",
+        default="http://localhost:4000,http://127.0.0.1:4000",
         description="Comma-separated exact browser origins",
     )
 

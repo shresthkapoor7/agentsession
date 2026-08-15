@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { parseCodexRollout, type TokenUsage, type Transcript, type TranscriptEntry } from "@/lib/codex-rollout";
 import { parseClaudeSession } from "@/lib/claude-session";
+import { publishSessions, type PublishedShare, type PublishVisibility } from "@/lib/publish-session";
 import { createSessionView, type SessionTab } from "@/lib/session-tabs";
 
 type FilePickerHandle = { getFile: () => Promise<File>; name: string };
@@ -140,7 +141,7 @@ function viewerMessageHtml(entry: TranscriptEntry, index: number) {
   return `<div class="message ${messageClass}" id="${id}"><div class="message-content">${body}</div><div class="message-meta"><span class="role-label">${escapeHtml(entry.label)}</span><a href="#${id}" class="timestamp-link"><time datetime="${entry.timestamp}">${entry.timestamp}</time></a></div></div>`;
 }
 
-function viewerDocument(transcript: Transcript, { sessionCount = 1, sessionTabs = [], sourceSessions = [], summaryOnly = false }: { sessionCount?: number; sessionTabs?: SessionTab[]; sourceSessions?: Transcript[]; summaryOnly?: boolean } = {}) {
+export function viewerDocument(transcript: Transcript, { allowAddSessions = true, publishable = true, sessionCount = 1, sessionTabs = [], sourceSessions = [], summaryOnly = false }: { allowAddSessions?: boolean; publishable?: boolean; sessionCount?: number; sessionTabs?: SessionTab[]; sourceSessions?: Transcript[]; summaryOnly?: boolean } = {}) {
   const assistantName = transcript.provider === "claude" ? "Claude" : "Codex";
   const groups = summaryOnly ? [] : groupConversation(transcript.entries);
   const groupDurations = groups.map((group) => {
@@ -326,17 +327,16 @@ function viewerDocument(transcript: Transcript, { sessionCount = 1, sessionTabs 
   const meta = { format: "codex-transcripts.viewer.v3", total: items.length, chunk_size: Math.max(1, items.length), chunks: [""], kinds: transcript.entries.map((entry) => entry.kind[0]).join(""), ids: items.map((_, index) => `msg-${index}`), ts: transcript.entries.map((entry) => entry.timestamp), groups: groups.map((group, index) => ({ start: groups.slice(0, index).reduce((total, item) => total + item.length, 0), end: groups.slice(0, index + 1).reduce((total, item) => total + item.length, 0) - 1, prompt: group.find((entry) => entry.kind === "user")?.content ?? null, filters: groupFilters[index] })) };
   const scriptJson = (value: unknown) => JSON.stringify(value).replace(/</g, "\\u003c");
   const sessionSwitcher = sessionTabs.length
-    ? `<nav class="session-switcher" aria-label="Loaded ${assistantName} sessions" role="tablist">${sessionTabs.map((tab) => `<button aria-selected="${tab.active}" class="${tab.active ? "active" : ""}" data-session-tab="${tab.value}" role="tab" title="${escapeHtml(tab.label)}" type="button">${escapeHtml(tab.label)}</button>`).join("")}<button class="session-switcher-add" data-session-add type="button">Add sessions</button></nav>`
+    ? `<nav class="session-switcher" aria-label="Loaded ${assistantName} sessions" role="tablist">${sessionTabs.map((tab) => `<button aria-selected="${tab.active}" class="${tab.active ? "active" : ""}" data-session-tab="${tab.value}" role="tab" title="${escapeHtml(tab.label)}" type="button">${escapeHtml(tab.label)}</button>`).join("")}${allowAddSessions ? `<button class="session-switcher-add" data-session-add type="button">Add sessions</button>` : ""}</nav>`
     : "";
-  const sessionControlsScript = sessionTabs.length
-    ? `<script>document.querySelectorAll('[data-session-tab]').forEach(function(button){button.addEventListener('click',function(){window.parent.postMessage({source:'agentsession',type:'session-tab',tab:button.getAttribute('data-session-tab')},'*');});});document.querySelector('[data-session-add]').addEventListener('click',function(){window.parent.postMessage({source:'agentsession',type:'session-add'},'*');});</script>`
-    : "";
+  const sessionControlsScript = `<script>document.querySelectorAll('[data-session-tab]').forEach(function(button){button.addEventListener('click',function(){window.parent.postMessage({source:'agentsession',type:'session-tab',tab:button.getAttribute('data-session-tab')},'*');});});var addButton=document.querySelector('[data-session-add]');if(addButton){addButton.addEventListener('click',function(){window.parent.postMessage({source:'agentsession',type:'session-add'},'*');});}var publishButton=document.querySelector('[data-session-publish]');if(publishButton){publishButton.addEventListener('click',function(){window.parent.postMessage({source:'agentsession',type:'session-publish'},'*');});}</script>`;
   const bodyContent = summaryOnly
     ? `<section class="cumulative-session-note"><strong>Cumulative session</strong><span>Metrics across ${sessionCount} local ${assistantName} sessions. Individual transcripts remain available in their tabs.</span></section>`
     : `<nav id="side-nav" class="side-nav" aria-label="Jump between conversations"></nav><div id="conversations" class="conversations">${summary}</div><footer class="conversation-end" aria-label="End of session">End of session</footer><aside id="detail-pane" class="detail-pane" aria-hidden="true"><div class="detail-header"><span class="detail-role" id="detail-role"></span><span class="detail-time" id="detail-time"></span><button class="detail-close" id="detail-close">×</button></div><div class="detail-body" id="detail-body"></div></aside><dialog id="cmdk" class="cmdk"><div class="cmdk-box"><div class="cmdk-input-row"><input id="cmdk-input" placeholder="Search commands and transcript…"></div><div id="cmdk-list" class="cmdk-list"></div><div class="cmdk-footer"><span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span><span><kbd>↵</kbd> Select</span><span><kbd>Esc</kbd> Close</span></div></div></dialog>`;
   const headerControl = summaryOnly ? "" : `<button id="cmdk-trigger" class="cmdk-trigger" type="button"><svg class="cmdk-trigger-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg><span class="cmdk-trigger-label">Search</span><kbd class="cmdk-trigger-kbd">⌘K</kbd></button>`;
+  const headerActions = `<div class="header-controls">${publishable ? `<button class="publish-trigger" data-session-publish type="button">Publish</button>` : ""}${headerControl}</div>`;
   const title = summaryOnly ? `Cumulative ${assistantName} usage` : `${assistantName} transcript`;
-  return `<!doctype html><html><head><meta charset="utf-8"><script>(function(){var theme;try{theme=localStorage.getItem('theme')}catch(e){}if(theme!=='light'&&theme!=='dark'){theme=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'}document.documentElement.setAttribute('data-theme',theme);document.documentElement.style.backgroundColor=theme==='dark'?'#000106':'#FCEFD5'})()</script><link rel="stylesheet" href="/codex-transcripts.css"></head><body><div class="container"><div class="header-row"><h1>${title}</h1>${headerControl}</div>${sessionSwitcher}<div class="summary-row">${summaryHtml}${summaryOnly ? "" : sortHtml}</div>${noticeHtml}${bodyContent}</div><script>window.__CODEX_TRANSCRIPTS_META__=${scriptJson(meta)};window.__CODEX_TRANSCRIPTS__={chunks:{0:${scriptJson(items)}}};</script>${sessionControlsScript}<script src="/codex-transcripts-viewer.js"></script></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><script>(function(){var theme;try{theme=localStorage.getItem('theme')}catch(e){}if(theme!=='light'&&theme!=='dark'){theme=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'}document.documentElement.setAttribute('data-theme',theme);document.documentElement.style.backgroundColor=theme==='dark'?'#000106':'#FCEFD5'})()</script><link rel="stylesheet" href="/codex-transcripts.css"></head><body><div class="container"><div class="header-row"><h1>${title}</h1>${headerActions}</div>${sessionSwitcher}<div class="summary-row">${summaryHtml}${summaryOnly ? "" : sortHtml}</div>${noticeHtml}${bodyContent}</div><script>window.__CODEX_TRANSCRIPTS_META__=${scriptJson(meta)};window.__CODEX_TRANSCRIPTS__={chunks:{0:${scriptJson(items)}}};</script>${sessionControlsScript}<script src="/codex-transcripts-viewer.js"></script></body></html>`;
 }
 
 type ProviderKey = "codex" | "claude";
@@ -352,6 +352,13 @@ export default function Home() {
   const [activeTab, setActiveTab] = useState<number | "cumulative">(0);
   const [pathCopied, setPathCopied] = useState(false);
   const [provider, setProvider] = useState<ProviderKey>("codex");
+  const [publishError, setPublishError] = useState<string | null>(null);
+  const [publishName, setPublishName] = useState("");
+  const [publishOpen, setPublishOpen] = useState(false);
+  const [publishPassword, setPublishPassword] = useState("");
+  const [publishResult, setPublishResult] = useState<PublishedShare | null>(null);
+  const [publishStatus, setPublishStatus] = useState<"idle" | "publishing">("idle");
+  const [publishVisibility, setPublishVisibility] = useState<PublishVisibility>("public");
   const fallbackInput = useRef<HTMLInputElement>(null);
   const fallbackAppend = useRef(false);
   const transcriptFrame = useRef<HTMLIFrameElement>(null);
@@ -369,6 +376,12 @@ export default function Home() {
         fallbackInput.current?.click();
         return;
       }
+      if (data.type === "session-publish") {
+        setPublishError(null);
+        setPublishResult(null);
+        setPublishOpen(true);
+        return;
+      }
       if (data.type !== "session-tab") return;
       if (data.tab === "cumulative") setActiveTab("cumulative");
       else if (typeof data.tab === "string" && /^\d+$/.test(data.tab)) {
@@ -382,6 +395,39 @@ export default function Home() {
 
   function copyPath() {
     navigator.clipboard.writeText(cfg.path).then(() => setPathCopied(true)).catch(() => setPathCopied(false));
+  }
+
+  function closePublish() {
+    if (publishStatus === "publishing") return;
+    setPublishOpen(false);
+    setPublishError(null);
+  }
+
+  async function copyPublishedLink() {
+    if (!publishResult) return;
+    try {
+      await navigator.clipboard.writeText(publishResult.share_url);
+    } catch {
+      setPublishError("Could not copy the link. Copy it from the field instead.");
+    }
+  }
+
+  async function submitPublish(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setPublishError(null);
+    setPublishStatus("publishing");
+    try {
+      setPublishResult(await publishSessions({
+        displayName: publishName,
+        password: publishPassword,
+        transcripts,
+        visibility: publishVisibility,
+      }));
+    } catch (caught) {
+      setPublishError(caught instanceof Error ? caught.message : "The session could not be published.");
+    } finally {
+      setPublishStatus("idle");
+    }
   }
 
   async function loadSessionFiles(fileList: FileList | File[], append = false) {
@@ -452,7 +498,7 @@ export default function Home() {
       sessionTabs,
       sourceSessions: cumulative ? transcripts : [],
       summaryOnly: cumulative,
-    })} tabIndex={0} title={cumulative ? `Cumulative ${provider === "claude" ? "Claude" : "Codex"} usage` : `${currentTranscript.provider === "claude" ? "Claude" : "Codex"} transcript`} />{fallbackFileInput}</>;
+    })} tabIndex={0} title={cumulative ? `Cumulative ${provider === "claude" ? "Claude" : "Codex"} usage` : `${currentTranscript.provider === "claude" ? "Claude" : "Codex"} transcript`} />{fallbackFileInput}{publishOpen ? <div aria-modal="true" className="publish-overlay" onMouseDown={closePublish} role="dialog" aria-labelledby="publish-title"><section className="publish-dialog" onMouseDown={(event) => event.stopPropagation()}><header><div><p>Encrypted share</p><h2 id="publish-title">Publish this session</h2></div><button aria-label="Close publish dialog" disabled={publishStatus === "publishing"} onClick={closePublish} type="button">×</button></header>{publishResult ? <div className="publish-success"><h3>Share ready</h3><p>This link expires in 21 days. Save the management link below if you may need to revoke it.</p><label>Share link<input readOnly value={publishResult.share_url} /></label><button className="publish-primary" onClick={() => void copyPublishedLink()} type="button">Copy share link</button><label>Management link<input readOnly value={publishResult.manage_url} /></label><p className="publish-muted">The encryption key stays in the share link fragment and is not sent to the server.</p></div> : <form onSubmit={(event) => void submitPublish(event)}><p className="publish-warning">Your transcript can contain messages, tool input, local paths, project details, and secrets. Review the loaded session before publishing.</p><label>Your name<input autoComplete="name" autoFocus maxLength={80} onChange={(event) => setPublishName(event.target.value)} placeholder="Name shown on the share" required value={publishName} /></label><fieldset><legend>Access</legend><label className="publish-choice"><input checked={publishVisibility === "public"} name="visibility" onChange={() => setPublishVisibility("public")} type="radio" value="public" /><span><strong>Anyone with the link</strong><small>No password required</small></span></label><label className="publish-choice"><input checked={publishVisibility === "password"} name="visibility" onChange={() => setPublishVisibility("password")} type="radio" value="password" /><span><strong>Password protected</strong><small>Viewers enter a password before opening it</small></span></label></fieldset>{publishVisibility === "password" ? <label>Password<input autoComplete="new-password" minLength={8} onChange={(event) => setPublishPassword(event.target.value)} placeholder="At least 8 characters" required type="password" value={publishPassword} /></label> : null}{publishError ? <p className="publish-error" role="alert">{publishError}</p> : null}<footer><span>Encrypted in your browser · expires in 21 days</span><button className="publish-primary" disabled={publishStatus === "publishing"} type="submit">{publishStatus === "publishing" ? "Publishing…" : "Publish session"}</button></footer></form>}</section></div> : null}</>;
     /*
     const groups = groupConversation(transcript.entries);
     const matches = groups.map((group, index) => ({ group, index })).filter(({ group }) =>

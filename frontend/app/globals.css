@@ -146,8 +146,7 @@ input:focus-visible {
 .publish-success > p { color: var(--publish-muted); font-size: .88rem; line-height: 1.5; }
 .publish-success .publish-primary { justify-self: start; }
 
-@media (prefers-color-scheme: light) {
-  .publish-overlay {
+.publish-overlay[data-theme="light"] {
     --publish-accent-soft: rgb(42 99 223 / 10%);
     --publish-bg: #fffdf8;
     --publish-code-bg: #fff;
@@ -158,7 +157,6 @@ input:focus-visible {
     --publish-warning-border: #b96a00;
     --publish-warning-text: #714000;
     background: rgb(37 31 23 / 30%);
-  }
 }
 
 .share-shell {

@@ -5,7 +5,7 @@ import re
 import secrets
 
 from argon2 import PasswordHasher, Type
-from argon2.exceptions import VerificationError, VerifyMismatchError
+from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
 from fastapi import Request
 
 TOKEN_PATTERN = re.compile(r"^[A-Za-z0-9_-]{43}$")
@@ -39,7 +39,7 @@ def hash_password(password: str) -> str:
 def verify_password(password_hash: str, password: str) -> bool:
     try:
         return PASSWORD_HASHER.verify(password_hash, password)
-    except (VerifyMismatchError, VerificationError):
+    except (InvalidHashError, VerifyMismatchError, VerificationError):
         return False
 
 

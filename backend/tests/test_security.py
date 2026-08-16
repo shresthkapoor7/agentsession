@@ -1,6 +1,13 @@
 from fastapi import Request
 
-from app.security import client_ip, generate_capability, hash_identifier, valid_capability
+from app.security import (
+    client_ip,
+    generate_capability,
+    hash_identifier,
+    hash_password,
+    valid_capability,
+    verify_password,
+)
 
 
 def request_with_headers(headers: list[tuple[bytes, bytes]], host: str = "127.0.0.1") -> Request:
@@ -48,3 +55,11 @@ def test_client_ip_rejects_an_invalid_forwarded_value() -> None:
     request = request_with_headers([(b"x-forwarded-for", b"not-an-ip")], host="192.0.2.7")
 
     assert client_ip(request, trusted_proxy_hops=1) == "192.0.2.7"
+
+
+def test_password_verification_rejects_wrong_and_malformed_hashes() -> None:
+    digest = hash_password("correct-password")
+
+    assert verify_password(digest, "correct-password")
+    assert not verify_password(digest, "wrong-password")
+    assert not verify_password("not-an-argon2-hash", "correct-password")

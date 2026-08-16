@@ -138,7 +138,8 @@ function viewerMessageHtml(entry: TranscriptEntry, index: number) {
     : entry.kind === "result" ? `<div class="tool-result"><pre>${content}</pre></div>`
     : `<div class="thinking"><div class="thinking-label">${escapeHtml(entry.label)}</div>${renderMarkdown(entry.content)}</div>`;
   const messageClass = entry.kind === "result" ? "tool-reply" : entry.kind === "notice" ? "system" : entry.kind;
-  return `<div class="message ${messageClass}" id="${id}"><div class="message-content">${body}</div><div class="message-meta"><span class="role-label">${escapeHtml(entry.label)}</span><a href="#${id}" class="timestamp-link"><time datetime="${entry.timestamp}">${entry.timestamp}</time></a></div></div>`;
+  const timestamp = escapeHtml(entry.timestamp);
+  return `<div class="message ${messageClass}" id="${id}"><div class="message-content">${body}</div><div class="message-meta"><span class="role-label">${escapeHtml(entry.label)}</span><a href="#${id}" class="timestamp-link"><time datetime="${timestamp}">${timestamp}</time></a></div></div>`;
 }
 
 export function viewerDocument(transcript: Transcript, { allowAddSessions = true, publishable = true, sessionCount = 1, sessionTabs = [], sharedBy = null, sourceSessions = [], summaryOnly = false }: { allowAddSessions?: boolean; publishable?: boolean; sessionCount?: number; sessionTabs?: SessionTab[]; sharedBy?: string | null; sourceSessions?: Transcript[]; summaryOnly?: boolean } = {}) {
@@ -213,7 +214,8 @@ export function viewerDocument(transcript: Transcript, { allowAddSessions = true
     const tokens = groupFilters[index].token_count;
     const tokenLabel = tokens >= 1_000_000 ? `${(tokens / 1_000_000).toFixed(1)}M` : tokens >= 1_000 ? `${Math.round(tokens / 1_000)}K` : String(tokens);
     const metaExtra = [statsStr, tokens ? `${tokenLabel} processed` : "", `⏱ ${durationLabel(durationMs)}`].filter(Boolean).join(" · ");
-    const html = `<details class="conversation index-item" data-group-index="${index}" data-start="${start}" data-end="${end}"><summary class="conversation-summary" data-preview="${escapeHtml(prompt)}" data-label="#${index + 1}"><div class="index-item-content conversation-prompt"><p>${renderInline(prompt)}</p></div><div class="conversation-meta"><span class="index-item-number">#${index + 1}</span><span class="conversation-jump"><time datetime="${group[0].timestamp}">${group[0].timestamp}</time></span><span class="conversation-stats-line">· ${metaExtra}</span></div>${responseHtml}</summary><div class="conversation-body"><div class="conversation-messages" id="group-${index}"></div></div></details>`;
+    const groupTimestamp = escapeHtml(group[0].timestamp);
+    const html = `<details class="conversation index-item" data-group-index="${index}" data-start="${start}" data-end="${end}"><summary class="conversation-summary" data-preview="${escapeHtml(prompt)}" data-label="#${index + 1}"><div class="index-item-content conversation-prompt"><p>${renderInline(prompt)}</p></div><div class="conversation-meta"><span class="index-item-number">#${index + 1}</span><span class="conversation-jump"><time datetime="${groupTimestamp}">${groupTimestamp}</time></span><span class="conversation-stats-line">· ${metaExtra}</span></div>${responseHtml}</summary><div class="conversation-body"><div class="conversation-messages" id="group-${index}"></div></div></details>`;
     start = end + 1;
     return html;
   }).join("");

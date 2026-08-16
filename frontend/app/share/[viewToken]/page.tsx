@@ -9,20 +9,33 @@ import { decryptSharedSessions } from "@/lib/share-session";
 import { createSessionView } from "@/lib/session-tabs";
 
 type ShareInfo = {
-  download_url?: string;
+  download_url?: string | null;
   metadata: { display_name: string; expires_at: string; provider: "claude" | "codex" };
   requires_password: boolean;
 };
 
+function errorDetail(detail: unknown) {
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const messages = detail.flatMap((value) => {
+      if (!value || typeof value !== "object") return [];
+      const message = (value as { msg?: unknown }).msg;
+      return typeof message === "string" && message.trim() ? [message] : [];
+    });
+    if (messages.length) return messages.join(" ");
+  }
+  return null;
+}
+
 async function getShare(token: string, password?: string) {
-  const url = `${getApiUrl()}/v1/shares/${token}${password === undefined ? "" : "/unlock"}`;
+  const url = `${getApiUrl()}/v1/shares/${encodeURIComponent(token)}${password === undefined ? "" : "/unlock"}`;
   const response = await fetch(url, password === undefined ? undefined : {
     body: JSON.stringify({ password }),
     headers: { "content-type": "application/json" },
     method: "POST",
   });
-  const body = await response.json().catch(() => null) as (ShareInfo & { detail?: string }) | null;
-  if (!response.ok) throw new Error(body?.detail ?? "This share is unavailable.");
+  const body = await response.json().catch(() => null) as (ShareInfo & { detail?: unknown }) | null;
+  if (!response.ok) throw new Error(errorDetail(body?.detail) ?? "This share is unavailable.");
   return body as ShareInfo;
 }
 
@@ -37,29 +50,35 @@ export default function SharedTranscriptPage() {
   const [transcripts, setTranscripts] = useState<Transcript[]>([]);
   const frame = useRef<HTMLIFrameElement>(null);
 
-  async function load(passwordValue?: string) {
+  async function load(passwordValue?: string, isCurrent: () => boolean = () => true) {
     setLoading(true);
     setError(null);
     try {
       const nextInfo = await getShare(token, passwordValue);
+      if (!isCurrent()) return;
       setInfo(nextInfo);
       if (nextInfo.requires_password) return;
       const key = new URLSearchParams(window.location.hash.slice(1)).get("k");
       if (!key) throw new Error("The decryption key is missing. Open the complete share link.");
       if (!nextInfo.download_url) throw new Error("The share download is unavailable.");
       const next = await decryptSharedSessions(nextInfo.download_url, key);
+      if (!isCurrent()) return;
       setTranscripts(next);
       setActiveTab(next.length > 1 ? "cumulative" : 0);
     } catch (caught) {
+      if (!isCurrent()) return;
       setError(caught instanceof Error ? caught.message : "This share could not be opened.");
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   }
 
   useEffect(() => {
-    const timer = window.setTimeout(() => { void load(); }, 0);
-    return () => window.clearTimeout(timer);
+    let current = true;
+    // The initial request intentionally drives the loading state for this token.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void load(undefined, () => current);
+    return () => { current = false; };
   }, [token]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
@@ -75,7 +94,7 @@ export default function SharedTranscriptPage() {
   }, [transcripts.length]);
 
   const view = createSessionView(transcripts, activeTab);
-  if (view) return <iframe className="codex-transcript-frame" ref={frame} srcDoc={viewerDocument(view.currentTranscript, { allowAddSessions: false, publishable: false, sessionCount: transcripts.length, sessionTabs: view.sessionTabs, sharedBy: info?.metadata.display_name ?? null, sourceSessions: view.cumulative ? transcripts : [], summaryOnly: view.cumulative })} title="Shared transcript" />;
-  if (info?.requires_password) return <main className="share-shell"><section className="share-card"><p className="share-eyebrow">Password protected</p><h1>{info.metadata.display_name}&rsquo;s session</h1><p>Enter the password to open this encrypted transcript.</p><form onSubmit={(event) => { event.preventDefault(); void load(password); }}><label>Password<input autoFocus onChange={(event) => setPassword(event.target.value)} required type="password" value={password} /></label>{error ? <p className="share-error" role="alert">{error}</p> : null}<button type="submit">{loading ? "Opening…" : "Open transcript"}</button></form></section></main>;
+  if (view) return <iframe className="codex-transcript-frame" ref={frame} sandbox="allow-scripts" srcDoc={viewerDocument(view.currentTranscript, { allowAddSessions: false, publishable: false, sessionCount: transcripts.length, sessionTabs: view.sessionTabs, sharedBy: info?.metadata.display_name ?? null, sourceSessions: view.cumulative ? transcripts : [], summaryOnly: view.cumulative })} title="Shared transcript" />;
+  if (info?.requires_password) return <main className="share-shell"><section className="share-card"><p className="share-eyebrow">Password protected</p><h1>{info.metadata.display_name}&rsquo;s session</h1><p>Enter the password to open this encrypted transcript.</p><form onSubmit={(event) => { event.preventDefault(); void load(password); }}><label>Password<input autoComplete="current-password" autoFocus onChange={(event) => setPassword(event.target.value)} required type="password" value={password} /></label>{error ? <p className="share-error" role="alert">{error}</p> : null}<button disabled={loading} type="submit">{loading ? "Opening…" : "Open transcript"}</button></form></section></main>;
   return <main className="share-shell"><section className="share-card"><p className="share-eyebrow">Encrypted share</p><h1>{loading ? "Opening shared session…" : "This share is unavailable"}</h1>{error ? <p className="share-error" role="alert">{error}</p> : <p>Loading the encrypted transcript in your browser.</p>}</section></main>;
 }

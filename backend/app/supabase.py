@@ -32,6 +32,15 @@ class SupabaseGateway:
         except (httpx.HTTPError, ValueError) as exc:
             raise UpstreamError("Supabase operation failed") from exc
 
+    def _json_object(self, response: httpx.Response) -> dict[str, Any]:
+        try:
+            data = response.json()
+        except ValueError as exc:
+            raise UpstreamError("Supabase returned invalid JSON") from exc
+        if not isinstance(data, dict):
+            raise UpstreamError("Supabase returned an invalid response")
+        return data
+
     async def rpc(self, name: str, payload: dict[str, Any] | None = None) -> Any:
         response = await self._request(
             "POST",
@@ -39,7 +48,10 @@ class SupabaseGateway:
             json=payload or {},
             headers={"content-type": "application/json"},
         )
-        return response.json()
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise UpstreamError("Supabase returned invalid JSON") from exc
 
     def _storage_path(self, path: str) -> str:
         return quote(f"{self._bucket}/{path}", safe="/")
@@ -51,7 +63,7 @@ class SupabaseGateway:
             json={},
             headers={"content-type": "application/json", "x-upsert": "false"},
         )
-        relative_url = response.json().get("url")
+        relative_url = self._json_object(response).get("url")
         if not isinstance(relative_url, str) or not relative_url.startswith("/"):
             raise UpstreamError("Supabase returned an invalid upload URL")
         return f"{self._storage_url}{relative_url}"
@@ -61,7 +73,7 @@ class SupabaseGateway:
             "GET",
             f"{self._storage_url}/object/info/{self._storage_path(path)}",
         )
-        data = response.json()
+        data = self._json_object(response)
         size = data.get("size")
         if size is None and isinstance(data.get("metadata"), dict):
             size = data["metadata"].get("size")
@@ -80,7 +92,7 @@ class SupabaseGateway:
             json={"expiresIn": expires_in},
             headers={"content-type": "application/json"},
         )
-        relative_url = response.json().get("signedURL")
+        relative_url = self._json_object(response).get("signedURL")
         if not isinstance(relative_url, str) or not relative_url.startswith("/"):
             raise UpstreamError("Supabase returned an invalid download URL")
         return f"{self._storage_url}{relative_url}"

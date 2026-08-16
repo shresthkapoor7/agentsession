@@ -1,5 +1,20 @@
 # Cloned reference repositories (keep out of commits)
 references/repos/
 
+# Local environment files and secrets
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Python backend artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.venv/
+
 # OS / editor noise
 .DS_Store

@@ -18,6 +18,8 @@
   function applyTheme(theme) {
     if (theme === 'light' || theme === 'dark') document.documentElement.setAttribute('data-theme', theme);
     else document.documentElement.removeAttribute('data-theme');
+    var effective = theme === 'light' || theme === 'dark' ? theme : getSystemTheme();
+    if (window.parent !== window) window.parent.postMessage({ source: 'agentsession', type: 'session-theme', theme: effective }, '*');
   }
   window.__ctTheme = {
     toggle: function() {

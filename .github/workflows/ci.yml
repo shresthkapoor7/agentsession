@@ -1,8 +1,11 @@
-name: Frontend checks
+name: Checks
 
 on:
   push:
   pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   frontend:
@@ -12,6 +15,8 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22.6.0
@@ -21,3 +26,22 @@ jobs:
       - run: npm test
       - run: npm run lint
       - run: npm run build
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          cache-dependency-glob: backend/uv.lock
+      - run: uv sync --locked --all-groups
+      - run: uv run ruff check .
+      - run: uv run pytest

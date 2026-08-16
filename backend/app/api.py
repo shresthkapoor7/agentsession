@@ -84,6 +84,12 @@ def first_row(value: Any) -> dict[str, Any] | None:
     return None
 
 
+def response_rows(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    return [row for row in value if isinstance(row, dict)]
+
+
 async def load_share(gateway: SupabaseGateway, view_token: str, pepper: str) -> ShareRecord:
     if not valid_capability(view_token):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Share not found")
@@ -355,15 +361,17 @@ async def cleanup_expired(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Cleanup not configured"
         )
-    if x_internal_token is None or not secrets.compare_digest(x_internal_token, expected):
+    if x_internal_token is None or not secrets.compare_digest(
+        x_internal_token.encode("utf-8"), expected.encode("utf-8")
+    ):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Unauthorized")
 
-    claimed = await gateway.rpc("claim_expired_shares", {"p_limit": 100})
-    pending = await gateway.rpc("list_pending_deletions", {"p_limit": 100})
+    claimed = response_rows(await gateway.rpc("claim_expired_shares", {"p_limit": 100}))
+    pending = response_rows(await gateway.rpc("list_pending_deletions", {"p_limit": 100}))
     rows_by_id = {
         row["share_id"]: row
-        for row in [*(claimed or []), *(pending or [])]
-        if isinstance(row, dict)
+        for row in [*claimed, *pending]
+        if isinstance(row.get("share_id"), str) and isinstance(row.get("storage_path"), str)
     }
     deleted = 0
     for row in rows_by_id.values():
@@ -377,7 +385,7 @@ async def cleanup_expired(
 
     purged = await gateway.rpc("purge_old_rate_limits")
     return CleanupResponse(
-        claimed=len(claimed or []),
+        claimed=len(claimed),
         deleted=deleted,
         pending=max(len(rows_by_id) - deleted, 0),
         rate_limit_buckets_purged=int(purged or 0),

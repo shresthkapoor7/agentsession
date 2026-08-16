@@ -1,6 +1,8 @@
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.config import Settings, get_settings
@@ -10,6 +12,7 @@ from app.security import hash_password
 TOKEN = "a" * 43
 MANAGE_TOKEN = "b" * 43
 NOW = datetime.now(UTC)
+PASSWORD_DIGEST = hash_password("correct-password")
 
 
 class FakeGateway:
@@ -45,9 +48,7 @@ class FakeGateway:
                     "display_name": "Ada",
                     "provider": "codex",
                     "visibility": self.visibility,
-                    "password_hash": hash_password("correct-password")
-                    if self.visibility == "password"
-                    else None,
+                    "password_hash": PASSWORD_DIGEST if self.visibility == "password" else None,
                     "storage_path": self.storage_path,
                     "expires_at": (NOW + timedelta(days=21)).isoformat(),
                     "schema_version": 1,
@@ -98,24 +99,24 @@ def settings() -> Settings:
     )
 
 
-def client_for(gateway: FakeGateway) -> TestClient:
+@pytest.fixture
+def gateway() -> FakeGateway:
+    return FakeGateway()
+
+
+@pytest.fixture
+def client(gateway: FakeGateway) -> Iterator[TestClient]:
     app = create_app()
     app.dependency_overrides[get_settings] = settings
-    client = TestClient(app)
-    client.__enter__()
-    app.state.supabase = gateway
-    return client
+    with TestClient(app) as test_client:
+        app.state.supabase = gateway
+        yield test_client
 
 
-def close_client(client: TestClient) -> None:
-    client.__exit__(None, None, None)
-
-
-def test_publish_intent_and_completion_return_capability_links() -> None:
-    gateway = FakeGateway()
-    client = client_for(gateway)
-    try:
-        intent = client.post(
+def test_publish_intent_and_completion_return_capability_links(
+    client: TestClient, gateway: FakeGateway
+) -> None:
+    intent = client.post(
             "/v1/publish-intents",
             json={
                 "display_name": "Ada",
@@ -125,75 +126,65 @@ def test_publish_intent_and_completion_return_capability_links() -> None:
                 "compressed_bytes": 256,
                 "metrics": {"processed_tokens": 120, "models": ["gpt-5.6-terra"]},
             },
-        )
+    )
 
-        assert intent.status_code == 201
-        body = intent.json()
-        assert body["upload_url"] == "https://storage.example/upload"
-        assert len(body["view_token"]) == 43
-        assert len(body["manage_token"]) == 43
-        assert body["upload_headers"] == {
-            "content-type": "application/octet-stream",
-            "x-upsert": "false",
-        }
-        create_payload = next(
-            payload for name, payload in gateway.calls if name == "create_publish_intent"
-        )
-        assert create_payload["p_display_name"] == "Ada"
-        assert "p_storage_path" in create_payload
+    assert intent.status_code == 201
+    body = intent.json()
+    assert body["upload_url"] == "https://storage.example/upload"
+    assert len(body["view_token"]) == 43
+    assert len(body["manage_token"]) == 43
+    assert body["upload_headers"] == {
+        "content-type": "application/octet-stream",
+        "x-upsert": "false",
+    }
+    create_payload = next(
+        payload for name, payload in gateway.calls if name == "create_publish_intent"
+    )
+    assert create_payload["p_display_name"] == "Ada"
+    assert "p_storage_path" in create_payload
 
-        complete = client.post(
-            f"/v1/publish-intents/{body['publish_intent_id']}/complete",
-            json={"view_token": body["view_token"], "manage_token": body["manage_token"]},
-        )
+    complete = client.post(
+        f"/v1/publish-intents/{body['publish_intent_id']}/complete",
+        json={"view_token": body["view_token"], "manage_token": body["manage_token"]},
+    )
 
-        assert complete.status_code == 200
-        assert complete.json()["share_url"] == f"https://agentsession.example/share/{body['view_token']}"
-        assert complete.json()["manage_url"] == f"https://agentsession.example/manage/{body['manage_token']}"
-    finally:
-        close_client(client)
+    assert complete.status_code == 200
+    assert complete.json()["share_url"] == f"https://agentsession.example/share/{body['view_token']}"
+    assert complete.json()["manage_url"] == f"https://agentsession.example/manage/{body['manage_token']}"
 
 
-def test_password_share_hides_download_until_the_password_is_valid() -> None:
-    gateway = FakeGateway(visibility="password")
-    client = client_for(gateway)
-    try:
-        protected = client.get(f"/v1/shares/{TOKEN}")
-        wrong_password = client.post(
-            f"/v1/shares/{TOKEN}/unlock", json={"password": "wrong-password"}
-        )
-        unlocked = client.post(f"/v1/shares/{TOKEN}/unlock", json={"password": "correct-password"})
+def test_password_share_hides_download_until_the_password_is_valid(
+    client: TestClient, gateway: FakeGateway
+) -> None:
+    gateway.visibility = "password"
+    protected = client.get(f"/v1/shares/{TOKEN}")
+    wrong_password = client.post(
+        f"/v1/shares/{TOKEN}/unlock", json={"password": "wrong-password"}
+    )
+    unlocked = client.post(f"/v1/shares/{TOKEN}/unlock", json={"password": "correct-password"})
 
-        assert protected.status_code == 200
-        assert protected.json()["requires_password"] is True
-        assert protected.json()["download_url"] is None
-        assert protected.json()["metadata"]["display_name"] == "Ada"
-        assert wrong_password.status_code == 401
-        assert unlocked.status_code == 200
-        assert unlocked.json()["download_url"] == "https://storage.example/download"
-    finally:
-        close_client(client)
+    assert protected.status_code == 200
+    assert protected.json()["requires_password"] is True
+    assert protected.json()["download_url"] is None
+    assert protected.json()["metadata"]["display_name"] == "Ada"
+    assert wrong_password.status_code == 401
+    assert unlocked.status_code == 200
+    assert unlocked.json()["download_url"] == "https://storage.example/download"
 
 
-def test_revoke_deletes_the_encrypted_object_and_metadata() -> None:
-    gateway = FakeGateway()
-    client = client_for(gateway)
-    try:
-        response = client.post(f"/v1/manage/{MANAGE_TOKEN}/revoke")
+def test_revoke_deletes_the_encrypted_object_and_metadata(
+    client: TestClient, gateway: FakeGateway
+) -> None:
+    response = client.post(f"/v1/manage/{MANAGE_TOKEN}/revoke")
 
-        assert response.status_code == 200
-        assert response.json() == {"status": "revoked", "cleanup_pending": False}
-        assert gateway.deleted == [[gateway.storage_path]]
-        assert "delete_share_metadata" in [name for name, _ in gateway.calls]
-    finally:
-        close_client(client)
+    assert response.status_code == 200
+    assert response.json() == {"status": "revoked", "cleanup_pending": False}
+    assert gateway.deleted == [[gateway.storage_path]]
+    assert "delete_share_metadata" in [name for name, _ in gateway.calls]
 
 
-def test_public_intent_rejects_a_password() -> None:
-    gateway = FakeGateway()
-    client = client_for(gateway)
-    try:
-        response = client.post(
+def test_public_intent_rejects_a_password(client: TestClient) -> None:
+    response = client.post(
             "/v1/publish-intents",
             json={
                 "display_name": "Ada",
@@ -203,8 +194,19 @@ def test_public_intent_rejects_a_password() -> None:
                 "schema_version": 1,
                 "compressed_bytes": 256,
             },
-        )
+    )
 
-        assert response.status_code == 422
-    finally:
-        close_client(client)
+    assert response.status_code == 422
+
+
+def test_cleanup_rejects_missing_or_invalid_internal_tokens(
+    client: TestClient, gateway: FakeGateway
+) -> None:
+    missing = client.post("/v1/internal/cleanup-expired")
+    invalid = client.post(
+        "/v1/internal/cleanup-expired", headers={"x-internal-token": "wrong-token"}
+    )
+
+    assert missing.status_code == 401
+    assert invalid.status_code == 401
+    assert gateway.calls == []

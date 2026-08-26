@@ -37,14 +37,20 @@ test("creates a shareable archive with an index and one source session", () => {
   ]);
 });
 
-test("numbers multiple sessions so they can be referenced from the shared index", () => {
+test("includes a viewer page for each session referenced by the shared index", () => {
   const archive = createSessionArchive({
     assets: { css: "", viewer: "" },
-    indexHtml: '<a href="session-1.jsonl">One</a><a href="session-2.jsonl">Two</a>',
+    indexHtml: '<a href="session-1.html">One</a><a href="session-2.html">Two</a>',
+    pages: [{ content: "one viewer", filename: "session-1.html" }, { content: "two viewer", filename: "session-2.html" }],
     provider: "claude",
     sessions: [{ content: "one", filename: "one.jsonl" }, { content: "two", filename: "two.jsonl" }],
   });
 
   assert.deepEqual(archive.sessionFiles, ["session-1.jsonl", "session-2.jsonl"]);
-  assert.ok(zipNames(archive.bytes).includes("agentsession-claude-sessions/session-2.jsonl"));
+  assert.deepEqual(zipNames(archive.bytes).slice(-4), [
+    "agentsession-claude-sessions/session-1.html",
+    "agentsession-claude-sessions/session-2.html",
+    "agentsession-claude-sessions/session-1.jsonl",
+    "agentsession-claude-sessions/session-2.jsonl",
+  ]);
 });

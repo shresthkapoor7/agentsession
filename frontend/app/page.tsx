@@ -143,7 +143,7 @@ function viewerMessageHtml(entry: TranscriptEntry, index: number) {
   return `<div class="message ${messageClass}" id="${id}"><div class="message-content">${body}</div><div class="message-meta"><span class="role-label">${escapeHtml(entry.label)}</span><a href="#${id}" class="timestamp-link"><time datetime="${timestamp}">${timestamp}</time></a></div></div>`;
 }
 
-export function viewerDocument(transcript: Transcript, { allowAddSessions = true, archiveFiles = [], assetPrefix = "/", exportable = true, publishable = true, sessionCount = 1, sessionTabs = [], sharedBy = null, sourceSessions = [], summaryOnly = false }: { allowAddSessions?: boolean; archiveFiles?: Array<{ filename: string; label: string }>; assetPrefix?: string; exportable?: boolean; publishable?: boolean; sessionCount?: number; sessionTabs?: SessionTab[]; sharedBy?: string | null; sourceSessions?: Transcript[]; summaryOnly?: boolean } = {}) {
+export function viewerDocument(transcript: Transcript, { allowAddSessions = true, archiveFiles = [], assetPrefix = "/", exportable = true, publishable = true, sessionCount = 1, sessionTabs = [], sharedBy = null, sourceSessions = [], staticSessionLinks = [], summaryOnly = false }: { allowAddSessions?: boolean; archiveFiles?: Array<{ filename: string; label: string }>; assetPrefix?: string; exportable?: boolean; publishable?: boolean; sessionCount?: number; sessionTabs?: SessionTab[]; sharedBy?: string | null; sourceSessions?: Transcript[]; staticSessionLinks?: Array<{ active: boolean; href: string; label: string }>; summaryOnly?: boolean } = {}) {
   const assistantName = transcript.provider === "claude" ? "Claude" : "Codex";
   const groups = summaryOnly ? [] : groupConversation(transcript.entries);
   const groupDurations = groups.map((group) => {
@@ -329,7 +329,9 @@ export function viewerDocument(transcript: Transcript, { allowAddSessions = true
   // chunk files that do not exist.
   const meta = { format: "codex-transcripts.viewer.v3", total: items.length, chunk_size: Math.max(1, items.length), chunks: [""], kinds: transcript.entries.map((entry) => entry.kind[0]).join(""), ids: items.map((_, index) => `msg-${index}`), ts: transcript.entries.map((entry) => entry.timestamp), groups: groups.map((group, index) => ({ start: groups.slice(0, index).reduce((total, item) => total + item.length, 0), end: groups.slice(0, index + 1).reduce((total, item) => total + item.length, 0) - 1, prompt: group.find((entry) => entry.kind === "user")?.content ?? null, filters: groupFilters[index] })) };
   const scriptJson = (value: unknown) => JSON.stringify(value).replace(/</g, "\\u003c");
-  const sessionSwitcher = sessionTabs.length || allowAddSessions
+  const sessionSwitcher = staticSessionLinks.length
+    ? `<nav class="session-switcher" aria-label="Exported ${assistantName} sessions">${staticSessionLinks.map((tab) => `<a ${tab.active ? 'aria-current="page" class="active"' : ""} href="${escapeHtml(tab.href)}" title="${escapeHtml(tab.label)}">${escapeHtml(tab.label)}</a>`).join("")}</nav>`
+    : sessionTabs.length || allowAddSessions
     ? `<nav class="session-switcher" aria-label="Loaded ${assistantName} sessions" role="tablist">${sessionTabs.map((tab) => `<button aria-selected="${tab.active}" class="${tab.active ? "active" : ""}" data-session-tab="${tab.value}" role="tab" title="${escapeHtml(tab.label)}" type="button">${escapeHtml(tab.label)}</button>`).join("")}${allowAddSessions ? `<button class="session-switcher-add" data-session-add type="button">Add sessions</button>` : ""}</nav>`
     : "";
   const sessionControlsScript = `<script>document.querySelectorAll('[data-session-tab]').forEach(function(button){button.addEventListener('click',function(){window.parent.postMessage({source:'agentsession',type:'session-tab',tab:button.getAttribute('data-session-tab')},'*');});});var addButton=document.querySelector('[data-session-add]');if(addButton){addButton.addEventListener('click',function(){window.parent.postMessage({source:'agentsession',type:'session-add'},'*');});}var publishButton=document.querySelector('[data-session-publish]');if(publishButton){publishButton.addEventListener('click',function(){window.parent.postMessage({source:'agentsession',type:'session-publish'},'*');});}var exportButton=document.querySelector('[data-session-export]');if(exportButton){exportButton.addEventListener('click',function(){window.parent.postMessage({source:'agentsession',type:'session-export'},'*');});window.addEventListener('message',function(event){var data=event.data||{};if(data.source!=='agentsession'||data.type!=='session-export-status')return;exportButton.disabled=Boolean(data.busy);exportButton.textContent=data.busy?'Exporting…':'Export';});}</script>`;
@@ -393,19 +395,37 @@ export default function Home() {
       const sessionFiles = loadedSessions.map((_, index) => loadedSessions.length === 1 ? "session.jsonl" : `session-${index + 1}.jsonl`);
       const exportView = createSessionView(transcripts, transcripts.length > 1 ? "cumulative" : 0);
       if (!exportView) throw new Error("There is no session to export.");
+      const staticSessionLinks = transcripts.length > 1
+        ? [
+          { active: true, href: "index.html", label: `Cumulative (${transcripts.length})` },
+          ...loadedSessions.map((session, index) => ({ active: false, href: `session-${index + 1}.html`, label: session.transcript.filename })),
+        ]
+        : [];
       const indexHtml = viewerDocument(exportView.currentTranscript, {
         allowAddSessions: false,
-        archiveFiles: loadedSessions.map((session, index) => ({ filename: sessionFiles[index], label: session.transcript.filename })),
         assetPrefix: "./",
         exportable: false,
         publishable: false,
         sessionCount: transcripts.length,
         sourceSessions: exportView.cumulative ? transcripts : [],
+        staticSessionLinks,
         summaryOnly: exportView.cumulative,
       });
       const archive = createSessionArchive({
         assets: { css: await cssResponse.text(), viewer: await viewerResponse.text() },
         indexHtml,
+        pages: loadedSessions.length > 1 ? loadedSessions.map((session, activeIndex) => ({
+          content: viewerDocument(session.transcript, {
+            allowAddSessions: false,
+            archiveFiles: [{ filename: sessionFiles[activeIndex], label: "Download original JSONL" }],
+            assetPrefix: "./",
+            exportable: false,
+            publishable: false,
+            sessionCount: transcripts.length,
+            staticSessionLinks: staticSessionLinks.map((tab, index) => ({ ...tab, active: index === activeIndex + 1 })),
+          }),
+          filename: `session-${activeIndex + 1}.html`,
+        })) : [],
         provider,
         sessions: loadedSessions.map((session) => ({ content: session.raw, filename: session.transcript.filename })),
       });

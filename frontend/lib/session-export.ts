@@ -3,6 +3,11 @@ export type SessionArchiveFile = {
   filename: string;
 };
 
+export type SessionArchivePage = {
+  content: string;
+  filename: string;
+};
+
 export type SessionArchive = {
   bytes: Uint8Array;
   downloadName: string;
@@ -101,9 +106,10 @@ function createZip(entries: ZipEntry[]) {
   return output;
 }
 
-export function createSessionArchive({ assets, indexHtml, provider, sessions }: {
+export function createSessionArchive({ assets, indexHtml, pages = [], provider, sessions }: {
   assets: { css: string; viewer: string };
   indexHtml: string;
+  pages?: SessionArchivePage[];
   provider: "claude" | "codex";
   sessions: SessionArchiveFile[];
 }): SessionArchive {
@@ -114,6 +120,7 @@ export function createSessionArchive({ assets, indexHtml, provider, sessions }: 
     { name: `${folderName}/index.html`, bytes: encoder.encode(indexHtml) },
     { name: `${folderName}/codex-transcripts.css`, bytes: encoder.encode(assets.css) },
     { name: `${folderName}/codex-transcripts-viewer.js`, bytes: encoder.encode(assets.viewer) },
+    ...pages.map((page) => ({ name: `${folderName}/${page.filename}`, bytes: encoder.encode(page.content) })),
     ...sessions.map((session, index) => ({ name: `${folderName}/${sessionFiles[index]}`, bytes: encoder.encode(session.content) })),
   ];
   return {

@@ -404,6 +404,9 @@ export default function Home() {
         : [];
       const indexHtml = viewerDocument(exportView.currentTranscript, {
         allowAddSessions: false,
+        archiveFiles: loadedSessions.length === 1
+          ? [{ filename: sessionFiles[0], label: "Download original JSONL" }]
+          : [],
         assetPrefix: "./",
         exportable: false,
         publishable: false,

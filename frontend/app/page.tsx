@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { parseCodexRollout, type TokenUsage, type Transcript, type TranscriptEntry } from "@/lib/codex-rollout";
 import { parseClaudeSession } from "@/lib/claude-session";
 import { publishSessions, type PublishedShare, type PublishVisibility } from "@/lib/publish-session";
+import { createSessionArchive } from "@/lib/session-export";
 import { createSessionView, type SessionTab } from "@/lib/session-tabs";
 
 type FilePickerHandle = { getFile: () => Promise<File>; name: string };
@@ -142,7 +143,7 @@ function viewerMessageHtml(entry: TranscriptEntry, index: number) {
   return `<div class="message ${messageClass}" id="${id}"><div class="message-content">${body}</div><div class="message-meta"><span class="role-label">${escapeHtml(entry.label)}</span><a href="#${id}" class="timestamp-link"><time datetime="${timestamp}">${timestamp}</time></a></div></div>`;
 }
 
-export function viewerDocument(transcript: Transcript, { allowAddSessions = true, publishable = true, sessionCount = 1, sessionTabs = [], sharedBy = null, sourceSessions = [], summaryOnly = false }: { allowAddSessions?: boolean; publishable?: boolean; sessionCount?: number; sessionTabs?: SessionTab[]; sharedBy?: string | null; sourceSessions?: Transcript[]; summaryOnly?: boolean } = {}) {
+export function viewerDocument(transcript: Transcript, { allowAddSessions = true, archiveFiles = [], assetPrefix = "/", exportable = true, publishable = true, sessionCount = 1, sessionTabs = [], sharedBy = null, sourceSessions = [], staticSessionLinks = [], summaryOnly = false }: { allowAddSessions?: boolean; archiveFiles?: Array<{ filename: string; label: string }>; assetPrefix?: string; exportable?: boolean; publishable?: boolean; sessionCount?: number; sessionTabs?: SessionTab[]; sharedBy?: string | null; sourceSessions?: Transcript[]; staticSessionLinks?: Array<{ active: boolean; href: string; label: string }>; summaryOnly?: boolean } = {}) {
   const assistantName = transcript.provider === "claude" ? "Claude" : "Codex";
   const groups = summaryOnly ? [] : groupConversation(transcript.entries);
   const groupDurations = groups.map((group) => {
@@ -328,21 +329,27 @@ export function viewerDocument(transcript: Transcript, { allowAddSessions = true
   // chunk files that do not exist.
   const meta = { format: "codex-transcripts.viewer.v3", total: items.length, chunk_size: Math.max(1, items.length), chunks: [""], kinds: transcript.entries.map((entry) => entry.kind[0]).join(""), ids: items.map((_, index) => `msg-${index}`), ts: transcript.entries.map((entry) => entry.timestamp), groups: groups.map((group, index) => ({ start: groups.slice(0, index).reduce((total, item) => total + item.length, 0), end: groups.slice(0, index + 1).reduce((total, item) => total + item.length, 0) - 1, prompt: group.find((entry) => entry.kind === "user")?.content ?? null, filters: groupFilters[index] })) };
   const scriptJson = (value: unknown) => JSON.stringify(value).replace(/</g, "\\u003c");
-  const sessionSwitcher = sessionTabs.length || allowAddSessions
+  const sessionSwitcher = staticSessionLinks.length
+    ? `<nav class="session-switcher" aria-label="Exported ${assistantName} sessions">${staticSessionLinks.map((tab) => `<a ${tab.active ? 'aria-current="page" class="active"' : ""} href="${escapeHtml(tab.href)}" title="${escapeHtml(tab.label)}">${escapeHtml(tab.label)}</a>`).join("")}</nav>`
+    : sessionTabs.length || allowAddSessions
     ? `<nav class="session-switcher" aria-label="Loaded ${assistantName} sessions" role="tablist">${sessionTabs.map((tab) => `<button aria-selected="${tab.active}" class="${tab.active ? "active" : ""}" data-session-tab="${tab.value}" role="tab" title="${escapeHtml(tab.label)}" type="button">${escapeHtml(tab.label)}</button>`).join("")}${allowAddSessions ? `<button class="session-switcher-add" data-session-add type="button">Add sessions</button>` : ""}</nav>`
     : "";
-  const sessionControlsScript = `<script>document.querySelectorAll('[data-session-tab]').forEach(function(button){button.addEventListener('click',function(){window.parent.postMessage({source:'agentsession',type:'session-tab',tab:button.getAttribute('data-session-tab')},'*');});});var addButton=document.querySelector('[data-session-add]');if(addButton){addButton.addEventListener('click',function(){window.parent.postMessage({source:'agentsession',type:'session-add'},'*');});}var publishButton=document.querySelector('[data-session-publish]');if(publishButton){publishButton.addEventListener('click',function(){window.parent.postMessage({source:'agentsession',type:'session-publish'},'*');});}</script>`;
+  const sessionControlsScript = `<script>document.querySelectorAll('[data-session-tab]').forEach(function(button){button.addEventListener('click',function(){window.parent.postMessage({source:'agentsession',type:'session-tab',tab:button.getAttribute('data-session-tab')},'*');});});var addButton=document.querySelector('[data-session-add]');if(addButton){addButton.addEventListener('click',function(){window.parent.postMessage({source:'agentsession',type:'session-add'},'*');});}var publishButton=document.querySelector('[data-session-publish]');if(publishButton){publishButton.addEventListener('click',function(){window.parent.postMessage({source:'agentsession',type:'session-publish'},'*');});}var exportButton=document.querySelector('[data-session-export]');if(exportButton){exportButton.addEventListener('click',function(){window.parent.postMessage({source:'agentsession',type:'session-export'},'*');});window.addEventListener('message',function(event){var data=event.data||{};if(data.source!=='agentsession'||data.type!=='session-export-status')return;exportButton.disabled=Boolean(data.busy);exportButton.textContent=data.busy?'Exporting…':'Export';});}</script>`;
   const bodyContent = summaryOnly
     ? `<section class="cumulative-session-note"><strong>Cumulative session</strong><span>Metrics across ${sessionCount} local ${assistantName} sessions. Individual transcripts remain available in their tabs.</span></section>`
     : `<nav id="side-nav" class="side-nav" aria-label="Jump between conversations"></nav><div id="conversations" class="conversations">${summary}</div><footer class="conversation-end" aria-label="End of session">End of session</footer><aside id="detail-pane" class="detail-pane" aria-hidden="true"><div class="detail-header"><span class="detail-role" id="detail-role"></span><span class="detail-time" id="detail-time"></span><button class="detail-close" id="detail-close">×</button></div><div class="detail-body" id="detail-body"></div></aside><dialog id="cmdk" class="cmdk"><div class="cmdk-box"><div class="cmdk-input-row"><input id="cmdk-input" placeholder="Search commands and transcript…"></div><div id="cmdk-list" class="cmdk-list"></div><div class="cmdk-footer"><span><kbd>↑</kbd><kbd>↓</kbd> Navigate</span><span><kbd>↵</kbd> Select</span><span><kbd>Esc</kbd> Close</span></div></div></dialog>`;
   const headerControl = summaryOnly ? "" : `<button id="cmdk-trigger" class="cmdk-trigger" type="button"><svg class="cmdk-trigger-icon" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.35-4.35"></path></svg><span class="cmdk-trigger-label">Search</span><kbd class="cmdk-trigger-kbd">⌘K</kbd></button>`;
-  const headerActions = `<div class="header-controls">${publishable ? `<button class="publish-trigger" data-session-publish type="button">Publish</button>` : ""}${headerControl}</div>`;
+  const headerActions = `<div class="header-controls">${exportable ? `<button class="publish-trigger" data-session-export type="button">Export</button>` : ""}${publishable ? `<button class="publish-trigger" data-session-publish type="button">Publish</button>` : ""}${headerControl}</div>`;
   const title = summaryOnly ? `Cumulative ${assistantName} usage` : `${assistantName} transcript`;
   const shareAttribution = sharedBy ? `<span class="shared-by">Shared by <strong>${escapeHtml(sharedBy)}</strong></span>` : "";
-  return `<!doctype html><html><head><meta charset="utf-8"><script>(function(){var theme;try{theme=localStorage.getItem('theme')}catch(e){}if(theme!=='light'&&theme!=='dark'){theme=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'}document.documentElement.setAttribute('data-theme',theme);document.documentElement.style.backgroundColor=theme==='dark'?'#000106':'#FCEFD5';if(window.parent!==window){window.parent.postMessage({source:'agentsession',type:'session-theme',theme:theme},'*')}})()</script><link rel="stylesheet" href="/codex-transcripts.css"></head><body><div class="container"><div class="header-row"><div class="header-title"><h1>${title}</h1>${shareAttribution}</div>${headerActions}</div>${sessionSwitcher}<div class="summary-row">${summaryHtml}${summaryOnly ? "" : sortHtml}</div>${noticeHtml}${bodyContent}</div><script>window.__CODEX_TRANSCRIPTS_META__=${scriptJson(meta)};window.__CODEX_TRANSCRIPTS__={chunks:{0:${scriptJson(items)}}};</script>${sessionControlsScript}<script src="/codex-transcripts-viewer.js"></script></body></html>`;
+  const archiveFilesHtml = archiveFiles.length ? `<aside class="share-notice"><div class="share-notice-title">Included source sessions</div><div class="share-notice-subtitle">This archive keeps the original JSONL files alongside this shareable viewer.</div><ul>${archiveFiles.map((file) => `<li><a download href="${escapeHtml(file.filename)}">${escapeHtml(file.label)}</a></li>`).join("")}</ul></aside>` : "";
+  const favicon = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect x='1' y='1' width='30' height='30' rx='6' fill='%23111111'/%3E%3Cpolyline points='9,11 15,16 9,21' fill='none' stroke='%23ffffff' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cline x1='17' y1='21.5' x2='24' y2='21.5' stroke='%234a90ff' stroke-width='2.6' stroke-linecap='round'/%3E%3C/svg%3E";
+  return `<!doctype html><html><head><meta charset="utf-8"><meta name="application-name" content="agentsession"><meta name="theme-color" content="#111111"><title>agentsession</title><link rel="icon" href="${favicon}" type="image/svg+xml"><script>(function(){var theme;try{theme=localStorage.getItem('theme')}catch(e){}if(theme!=='light'&&theme!=='dark'){theme=window.matchMedia&&window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'}document.documentElement.setAttribute('data-theme',theme);document.documentElement.style.backgroundColor=theme==='dark'?'#000106':'#FCEFD5';if(window.parent!==window){window.parent.postMessage({source:'agentsession',type:'session-theme',theme:theme},'*')}})()</script><link rel="stylesheet" href="${escapeHtml(assetPrefix)}codex-transcripts.css"></head><body><div class="container"><div class="header-row"><div class="header-title"><h1>${title}</h1>${shareAttribution}</div>${headerActions}</div>${sessionSwitcher}<div class="summary-row">${summaryHtml}${summaryOnly ? "" : sortHtml}</div>${noticeHtml}${archiveFilesHtml}${bodyContent}</div><script>window.__CODEX_TRANSCRIPTS_META__=${scriptJson(meta)};window.__CODEX_TRANSCRIPTS__={chunks:{0:${scriptJson(items)}}};</script>${sessionControlsScript}<script src="${escapeHtml(assetPrefix)}codex-transcripts-viewer.js"></script></body></html>`;
 }
 
 type ProviderKey = "codex" | "claude";
+type LoadedSession = { raw: string; transcript: Transcript };
+type LoadedSessionState = { activeTab: number | "cumulative"; loadedSessions: LoadedSession[] };
 const PROVIDERS: Record<ProviderKey, { label: string; title: string; path: string; file: string }> = {
   codex: { label: "Codex", title: "Open a Codex session", path: "~/.codex/sessions", file: "rollout-*.jsonl" },
   claude: { label: "Claude", title: "Open a Claude session", path: "~/.claude/projects", file: "*.jsonl" },
@@ -350,9 +357,9 @@ const PROVIDERS: Record<ProviderKey, { label: string; title: string; path: strin
 
 export default function Home() {
   const [error, setError] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [transcripts, setTranscripts] = useState<Transcript[]>([]);
-  const [activeTab, setActiveTab] = useState<number | "cumulative">(0);
+  const [sessionState, setSessionState] = useState<LoadedSessionState>({ activeTab: 0, loadedSessions: [] });
   const [pathCopied, setPathCopied] = useState(false);
   const [provider, setProvider] = useState<ProviderKey>("codex");
   const [publishError, setPublishError] = useState<string | null>(null);
@@ -366,9 +373,82 @@ export default function Home() {
   const [publishVisibility, setPublishVisibility] = useState<PublishVisibility>("public");
   const fallbackInput = useRef<HTMLInputElement>(null);
   const fallbackAppend = useRef(false);
+  const loadGeneration = useRef(0);
+  const loadQueue = useRef<Promise<void>>(Promise.resolve());
+  const providerRef = useRef<ProviderKey>("codex");
   const transcriptFrame = useRef<HTMLIFrameElement>(null);
   const cfg = PROVIDERS[provider];
+  const { activeTab, loadedSessions } = sessionState;
+  const transcripts = loadedSessions.map((session) => session.transcript);
   const publishReady = Boolean(publishName.trim()) && (publishVisibility !== "password" || publishPassword.length >= 8);
+
+  function setExportStatus(busy: boolean) {
+    setExporting(busy);
+    transcriptFrame.current?.contentWindow?.postMessage({ source: "agentsession", type: "session-export-status", busy }, "*");
+  }
+
+  async function exportSessions() {
+    if (exporting || !loadedSessions.length) return;
+    setError(null);
+    setExportStatus(true);
+    try {
+      const [cssResponse, viewerResponse] = await Promise.all([
+        fetch("/codex-transcripts.css"),
+        fetch("/codex-transcripts-viewer.js"),
+      ]);
+      if (!cssResponse.ok || !viewerResponse.ok) throw new Error("The standalone viewer files could not be prepared.");
+      const sessionFiles = loadedSessions.map((_, index) => loadedSessions.length === 1 ? "session.jsonl" : `session-${index + 1}.jsonl`);
+      const exportView = createSessionView(transcripts, transcripts.length > 1 ? "cumulative" : 0);
+      if (!exportView) throw new Error("There is no session to export.");
+      const staticSessionLinks = transcripts.length > 1
+        ? [
+          { active: true, href: "index.html", label: `Cumulative (${transcripts.length})` },
+          ...loadedSessions.map((session, index) => ({ active: false, href: `session-${index + 1}.html`, label: session.transcript.filename })),
+        ]
+        : [];
+      const indexHtml = viewerDocument(exportView.currentTranscript, {
+        allowAddSessions: false,
+        archiveFiles: loadedSessions.length === 1
+          ? [{ filename: sessionFiles[0], label: "Download original JSONL" }]
+          : [],
+        assetPrefix: "./",
+        exportable: false,
+        publishable: false,
+        sessionCount: transcripts.length,
+        sourceSessions: exportView.cumulative ? transcripts : [],
+        staticSessionLinks,
+        summaryOnly: exportView.cumulative,
+      });
+      const archive = createSessionArchive({
+        assets: { css: await cssResponse.text(), viewer: await viewerResponse.text() },
+        indexHtml,
+        pages: loadedSessions.length > 1 ? loadedSessions.map((session, activeIndex) => ({
+          content: viewerDocument(session.transcript, {
+            allowAddSessions: false,
+            archiveFiles: [{ filename: sessionFiles[activeIndex], label: "Download original JSONL" }],
+            assetPrefix: "./",
+            exportable: false,
+            publishable: false,
+            sessionCount: transcripts.length,
+            staticSessionLinks: staticSessionLinks.map((tab, index) => ({ ...tab, active: index === activeIndex + 1 })),
+          }),
+          filename: `session-${activeIndex + 1}.html`,
+        })) : [],
+        provider,
+        sessions: loadedSessions.map((session) => ({ content: session.raw, filename: session.transcript.filename })),
+      });
+      const url = URL.createObjectURL(new Blob([archive.bytes as Uint8Array<ArrayBuffer>], { type: "application/zip" }));
+      const link = document.createElement("a");
+      link.download = archive.downloadName;
+      link.href = url;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "The session archive could not be exported.");
+    } finally {
+      setExportStatus(false);
+    }
+  }
 
   useEffect(() => {
     function handleSessionControl(event: MessageEvent<unknown>) {
@@ -393,16 +473,20 @@ export default function Home() {
         setPublishOpen(true);
         return;
       }
+      if (data.type === "session-export") {
+        void exportSessions();
+        return;
+      }
       if (data.type !== "session-tab") return;
-      if (data.tab === "cumulative") setActiveTab("cumulative");
+      if (data.tab === "cumulative") setSessionState((current) => ({ ...current, activeTab: "cumulative" }));
       else if (typeof data.tab === "string" && /^\d+$/.test(data.tab)) {
         const index = Number(data.tab);
-        if (index < transcripts.length) setActiveTab(index);
+        if (index < transcripts.length) setSessionState((current) => ({ ...current, activeTab: index }));
       }
     }
     window.addEventListener("message", handleSessionControl);
     return () => window.removeEventListener("message", handleSessionControl);
-  }, [transcripts.length]);
+  });
 
   function copyPath() {
     navigator.clipboard.writeText(cfg.path).then(() => setPathCopied(true)).catch(() => setPathCopied(false));
@@ -447,29 +531,40 @@ export default function Home() {
   async function loadSessionFiles(fileList: FileList | File[], append = false) {
     const files = Array.from(fileList);
     if (!files.length) return;
-    setIsLoading(true);
-    setError(null);
-    try {
-      const results = await Promise.all(files.map(async (file) => {
-        try {
-          const raw = await file.text();
-          return { transcript: provider === "claude" ? parseClaudeSession(raw, file.name) : parseCodexRollout(raw, file.name) };
-        } catch (caught) {
-          return { error: `${file.name}: ${caught instanceof Error ? caught.message : "Could not read this transcript."}` };
-        }
-      }));
-      const loaded = results.flatMap((result) => result.transcript ? [result.transcript] : []);
-      const failed = results.flatMap((result) => result.error ? [result.error] : []);
-      if (!loaded.length) throw new Error(failed[0] ?? "Could not read these transcripts.");
-      const next = append ? [...transcripts, ...loaded] : loaded;
-      setTranscripts(next);
-      setActiveTab(next.length > 1 ? "cumulative" : 0);
-      if (failed.length) setError(`Loaded ${loaded.length} session${loaded.length === 1 ? "" : "s"}. Skipped ${failed.length}: ${failed.join(" ")}`);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not read these transcripts.");
-    } finally {
-      setIsLoading(false);
-    }
+    const capturedGeneration = loadGeneration.current;
+    const capturedProvider = providerRef.current;
+    const stillCurrent = () => capturedGeneration === loadGeneration.current && capturedProvider === providerRef.current;
+    const load = async () => {
+      if (!stillCurrent()) return;
+      setIsLoading(true);
+      setError(null);
+      try {
+        const results = await Promise.all(files.map(async (file) => {
+          try {
+            const raw = await file.text();
+            return { loaded: { raw, transcript: capturedProvider === "claude" ? parseClaudeSession(raw, file.name) : parseCodexRollout(raw, file.name) } };
+          } catch (caught) {
+            return { error: `${file.name}: ${caught instanceof Error ? caught.message : "Could not read this transcript."}` };
+          }
+        }));
+        if (!stillCurrent()) return;
+        const loaded = results.flatMap((result) => result.loaded ? [result.loaded] : []);
+        const failed = results.flatMap((result) => result.error ? [result.error] : []);
+        if (!loaded.length) throw new Error(failed[0] ?? "Could not read these transcripts.");
+        setSessionState((current) => {
+          const next = append ? [...current.loadedSessions, ...loaded] : loaded;
+          return { activeTab: next.length > 1 ? "cumulative" : 0, loadedSessions: next };
+        });
+        if (failed.length) setError(`Loaded ${loaded.length} session${loaded.length === 1 ? "" : "s"}. Skipped ${failed.length}: ${failed.join(" ")}`);
+      } catch (caught) {
+        if (stillCurrent()) setError(caught instanceof Error ? caught.message : "Could not read these transcripts.");
+      } finally {
+        if (stillCurrent()) setIsLoading(false);
+      }
+    };
+    const queuedLoad = loadQueue.current.then(load, load);
+    loadQueue.current = queuedLoad.catch(() => undefined);
+    await queuedLoad;
   }
 
   async function openSessionPicker(append = false) {
@@ -579,7 +674,7 @@ export default function Home() {
               type="button"
               aria-pressed={provider === key}
               className={provider === key ? "active" : ""}
-              onClick={() => { setProvider(key); setPathCopied(false); setError(null); setTranscripts([]); setActiveTab(0); }}
+              onClick={() => { providerRef.current = key; loadGeneration.current += 1; loadQueue.current = Promise.resolve(); setProvider(key); setPathCopied(false); setError(null); setIsLoading(false); setSessionState({ activeTab: 0, loadedSessions: [] }); }}
             >
               {PROVIDERS[key].label}
             </button>

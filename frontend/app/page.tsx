@@ -349,6 +349,7 @@ export function viewerDocument(transcript: Transcript, { allowAddSessions = true
 
 type ProviderKey = "codex" | "claude";
 type LoadedSession = { raw: string; transcript: Transcript };
+type LoadedSessionState = { activeTab: number | "cumulative"; loadedSessions: LoadedSession[] };
 const PROVIDERS: Record<ProviderKey, { label: string; title: string; path: string; file: string }> = {
   codex: { label: "Codex", title: "Open a Codex session", path: "~/.codex/sessions", file: "rollout-*.jsonl" },
   claude: { label: "Claude", title: "Open a Claude session", path: "~/.claude/projects", file: "*.jsonl" },
@@ -358,9 +359,7 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const [loadedSessions, setLoadedSessions] = useState<LoadedSession[]>([]);
-  const [transcripts, setTranscripts] = useState<Transcript[]>([]);
-  const [activeTab, setActiveTab] = useState<number | "cumulative">(0);
+  const [sessionState, setSessionState] = useState<LoadedSessionState>({ activeTab: 0, loadedSessions: [] });
   const [pathCopied, setPathCopied] = useState(false);
   const [provider, setProvider] = useState<ProviderKey>("codex");
   const [publishError, setPublishError] = useState<string | null>(null);
@@ -374,8 +373,13 @@ export default function Home() {
   const [publishVisibility, setPublishVisibility] = useState<PublishVisibility>("public");
   const fallbackInput = useRef<HTMLInputElement>(null);
   const fallbackAppend = useRef(false);
+  const loadGeneration = useRef(0);
+  const loadQueue = useRef<Promise<void>>(Promise.resolve());
+  const providerRef = useRef<ProviderKey>("codex");
   const transcriptFrame = useRef<HTMLIFrameElement>(null);
   const cfg = PROVIDERS[provider];
+  const { activeTab, loadedSessions } = sessionState;
+  const transcripts = loadedSessions.map((session) => session.transcript);
   const publishReady = Boolean(publishName.trim()) && (publishVisibility !== "password" || publishPassword.length >= 8);
 
   function setExportStatus(busy: boolean) {
@@ -474,10 +478,10 @@ export default function Home() {
         return;
       }
       if (data.type !== "session-tab") return;
-      if (data.tab === "cumulative") setActiveTab("cumulative");
+      if (data.tab === "cumulative") setSessionState((current) => ({ ...current, activeTab: "cumulative" }));
       else if (typeof data.tab === "string" && /^\d+$/.test(data.tab)) {
         const index = Number(data.tab);
-        if (index < transcripts.length) setActiveTab(index);
+        if (index < transcripts.length) setSessionState((current) => ({ ...current, activeTab: index }));
       }
     }
     window.addEventListener("message", handleSessionControl);
@@ -527,30 +531,40 @@ export default function Home() {
   async function loadSessionFiles(fileList: FileList | File[], append = false) {
     const files = Array.from(fileList);
     if (!files.length) return;
-    setIsLoading(true);
-    setError(null);
-    try {
-      const results = await Promise.all(files.map(async (file) => {
-        try {
-          const raw = await file.text();
-          return { loaded: { raw, transcript: provider === "claude" ? parseClaudeSession(raw, file.name) : parseCodexRollout(raw, file.name) } };
-        } catch (caught) {
-          return { error: `${file.name}: ${caught instanceof Error ? caught.message : "Could not read this transcript."}` };
-        }
-      }));
-      const loaded = results.flatMap((result) => result.loaded ? [result.loaded] : []);
-      const failed = results.flatMap((result) => result.error ? [result.error] : []);
-      if (!loaded.length) throw new Error(failed[0] ?? "Could not read these transcripts.");
-      const next = append ? [...loadedSessions, ...loaded] : loaded;
-      setLoadedSessions(next);
-      setTranscripts(next.map((session) => session.transcript));
-      setActiveTab(next.length > 1 ? "cumulative" : 0);
-      if (failed.length) setError(`Loaded ${loaded.length} session${loaded.length === 1 ? "" : "s"}. Skipped ${failed.length}: ${failed.join(" ")}`);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not read these transcripts.");
-    } finally {
-      setIsLoading(false);
-    }
+    const capturedGeneration = loadGeneration.current;
+    const capturedProvider = providerRef.current;
+    const stillCurrent = () => capturedGeneration === loadGeneration.current && capturedProvider === providerRef.current;
+    const load = async () => {
+      if (!stillCurrent()) return;
+      setIsLoading(true);
+      setError(null);
+      try {
+        const results = await Promise.all(files.map(async (file) => {
+          try {
+            const raw = await file.text();
+            return { loaded: { raw, transcript: capturedProvider === "claude" ? parseClaudeSession(raw, file.name) : parseCodexRollout(raw, file.name) } };
+          } catch (caught) {
+            return { error: `${file.name}: ${caught instanceof Error ? caught.message : "Could not read this transcript."}` };
+          }
+        }));
+        if (!stillCurrent()) return;
+        const loaded = results.flatMap((result) => result.loaded ? [result.loaded] : []);
+        const failed = results.flatMap((result) => result.error ? [result.error] : []);
+        if (!loaded.length) throw new Error(failed[0] ?? "Could not read these transcripts.");
+        setSessionState((current) => {
+          const next = append ? [...current.loadedSessions, ...loaded] : loaded;
+          return { activeTab: next.length > 1 ? "cumulative" : 0, loadedSessions: next };
+        });
+        if (failed.length) setError(`Loaded ${loaded.length} session${loaded.length === 1 ? "" : "s"}. Skipped ${failed.length}: ${failed.join(" ")}`);
+      } catch (caught) {
+        if (stillCurrent()) setError(caught instanceof Error ? caught.message : "Could not read these transcripts.");
+      } finally {
+        if (stillCurrent()) setIsLoading(false);
+      }
+    };
+    const queuedLoad = loadQueue.current.then(load, load);
+    loadQueue.current = queuedLoad.catch(() => undefined);
+    await queuedLoad;
   }
 
   async function openSessionPicker(append = false) {
@@ -660,7 +674,7 @@ export default function Home() {
               type="button"
               aria-pressed={provider === key}
               className={provider === key ? "active" : ""}
-              onClick={() => { setProvider(key); setPathCopied(false); setError(null); setLoadedSessions([]); setTranscripts([]); setActiveTab(0); }}
+              onClick={() => { providerRef.current = key; loadGeneration.current += 1; loadQueue.current = Promise.resolve(); setProvider(key); setPathCopied(false); setError(null); setIsLoading(false); setSessionState({ activeTab: 0, loadedSessions: [] }); }}
             >
               {PROVIDERS[key].label}
             </button>
